@@ -65,3 +65,16 @@ forbidden_modules =
     dsar_orchestrator.pipeline
     dsar_orchestrator.cli
     dsar_orchestrator.audit
+
+[importlinter:contract:6]
+name = log_analyser is a leaf (may import exceptions only)
+type = forbidden
+source_modules =
+    dsar_orchestrator.log_analyser
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.config
+    dsar_orchestrator.hash_chain
+    dsar_orchestrator.stages
