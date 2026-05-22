@@ -78,3 +78,17 @@ forbidden_modules =
     dsar_orchestrator.config
     dsar_orchestrator.hash_chain
     dsar_orchestrator.stages
+    dsar_orchestrator.module_agents
+
+[importlinter:contract:7]
+name = module_agents may import config + exceptions but not pipeline/cli/audit/log_analyser/stages
+type = forbidden
+source_modules =
+    dsar_orchestrator.module_agents
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.log_analyser
+    dsar_orchestrator.stages
+    dsar_orchestrator.hash_chain

@@ -217,101 +217,51 @@ def _lazy_import(module_path: str):
         ) from e
 
 
-def _try_lazy_import(module_path: str):
-    """Same as _lazy_import but returns None instead of raising when the
-    module isn't installed. Used by the per-stage agent check so the
-    pipeline degrades gracefully when a stage has no agent yet."""
-    try:
-        return importlib.import_module(module_path)
-    except ImportError:
-        return None
-
-
 def _check_module_work(cfg: CaseConfig, sub_stage: str) -> None:
-    """Invoke the toolkit's per-module agent to validate the work that
-    just finished.
+    """Invoke the orchestrator-side agent for ``sub_stage`` to validate
+    the work that just finished.
 
-    Convention (locked by the orchestration spec):
-        dsar_pipeline.module_agents.<sub_stage>
-            check_work(case_path: Path) -> ModuleCheckResult
-                .ok: bool
-                .severity: "info" | "warning" | "critical"
-                .findings: list[str]
-                .recommendation: str
+    Agents live in ``dsar_orchestrator.module_agents`` (brought home
+    2026-05-22 so validation versions with the orchestrator rather
+    than waiting on toolkit releases). Each ``check_<sub_stage>(cfg)``
+    function returns a ``ModuleCheckResult`` with severity in
+    ``{info, warning, critical}``.
 
-    If the agent's check returns ``ok=False`` with severity=critical,
-    the orchestrator raises ``PipelineHalt`` immediately. Lesser
-    severities are appended to ~/.dsar-audit/<case>/module_checks.jsonl
-    for the log analyser to pick up.
+    - ``ok=True`` (any severity) → record an audit row, continue.
+    - ``ok=False`` + ``severity=critical`` → record + ``PipelineHalt``.
+    - ``ok=False`` + warning → record, continue (log analyser may
+      escalate downstream).
 
-    If the toolkit doesn't ship an agent for this sub-stage, the check
-    degrades to a single audit-log warning so the operator knows the
-    stage ran unverified — but the pipeline does NOT halt. (Agents
-    will roll in across the toolkit; we can't block on their absence
-    today.)
+    Audit rows append to ``~/.dsar-audit/<case>/module_checks.jsonl``.
     """
+    # Local import to keep module_agents a leaf at the layering level.
+    from dsar_orchestrator import __version__
+    from dsar_orchestrator.module_agents import check_work
+
+    result = check_work(cfg, sub_stage)
+
     audit_path = Path.home() / ".dsar-audit" / cfg.case_no / "module_checks.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-
-    agent = _try_lazy_import(f"dsar_pipeline.module_agents.{sub_stage}")
-    if agent is None:
-        # No agent shipped for this stage — record the gap, don't halt.
-        row = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "sub_stage": sub_stage,
-            "outcome": "no_agent",
-            "severity": "info",
-            "message": (
-                f"No module agent registered for {sub_stage!r}; "
-                f"stage ran unverified. Add dsar_pipeline.module_agents."
-                f"{sub_stage} to enable validation."
-            ),
-            "schema_version": "1.0",
-            "producer_version": f"dsar_orchestrator {__import__('dsar_orchestrator').__version__}",
-        }
-        with open(audit_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        return
-
-    check_fn = getattr(agent, "check_work", None)
-    if check_fn is None:
-        # Agent module exists but doesn't expose the contract — record
-        # this as a critical issue (the toolkit ships a partial agent).
-        raise PipelineHalt(
-            f"case={cfg.case_no}: module agent "
-            f"dsar_pipeline.module_agents.{sub_stage} is missing "
-            f"`check_work(case_path)`. Re-installed dsar-toolkit may "
-            f"have shipped a partial agent module."
-        )
-
-    result = check_fn(cfg.case_path)
-    severity = getattr(result, "severity", "info")
-    ok = getattr(result, "ok", True)
-    findings = list(getattr(result, "findings", []))
-    recommendation = getattr(result, "recommendation", "")
-
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "sub_stage": sub_stage,
-        "ok": ok,
-        "severity": severity,
-        "findings": findings,
-        "recommendation": recommendation,
+        "ok": result.ok,
+        "severity": result.severity,
+        "findings": list(result.findings),
+        "recommendation": result.recommendation,
         "schema_version": "1.0",
-        "producer_version": f"dsar_orchestrator {__import__('dsar_orchestrator').__version__}",
+        "producer_version": f"dsar_orchestrator {__version__}",
     }
     with open(audit_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
         f.flush()
         os.fsync(f.fileno())
 
-    if not ok and severity == "critical":
+    if not result.ok and result.severity == "critical":
         raise PipelineHalt(
             f"case={cfg.case_no}: module agent for {sub_stage!r} "
-            f"flagged a critical issue: {findings!r}. "
-            f"Recommendation: {recommendation or '(none)'}. "
+            f"flagged a critical issue: {result.findings!r}. "
+            f"Recommendation: {result.recommendation or '(none)'}. "
             f"Full log: {audit_path}."
         )
 
