@@ -99,14 +99,26 @@ def build_stage_plan(
     from_stage: str | None,
     through_stage: str | None,
     only_stage: str | None,
+    *,
+    skip_fresh_artefacts: bool = True,
 ) -> StagePlan:
     """Decide which stages to run based on flags + existing artefacts.
 
-    Today this is intentionally simple: it honours --from/--through/
-    --only and the per-phase enabled flags from cfg. The full
-    upstream_hash-driven resume cascade lands once the toolkit modules
-    exist and produce hashed artefacts; this function picks them up via
-    presence + hash checks in a follow-up.
+    Three filters apply in order:
+
+    1. ``--only`` short-circuits to a single-stage plan.
+    2. ``--from`` / ``--through`` clip the coarse-stage range.
+    3. Per-phase enabled flags (``PII_CLASSIFY_MODE=off``,
+       ``REDACT_VERIFY_ENABLED=false``) remove stages.
+    4. Resume cascade: if ``skip_fresh_artefacts`` (default), every
+       sub-stage whose artefact is present AND whose recorded
+       ``upstream_hash`` matches the current upstream is skipped.
+       Coarse composite stages (``stage_2_parallel``, ``stage_3_parallel``)
+       are kept if ANY of their sub-stages need running.
+
+    Pass ``skip_fresh_artefacts=False`` to force a full re-run plan
+    (equivalent to the operator passing ``--if-exists overwrite`` on
+    every sub-stage's CLI).
     """
     plan = StagePlan(case_no=cfg.case_no)
 
@@ -131,8 +143,56 @@ def build_stage_plan(
             candidate.remove(s)
             plan.skipped.append((s, "REDACT_VERIFY_ENABLED=false"))
 
+    # Resume cascade: check freshness of each sub-stage's artefact.
+    if skip_fresh_artefacts:
+        candidate = _apply_resume_cascade(cfg, candidate, plan)
+
     plan.stages = candidate
     return plan
+
+
+def _apply_resume_cascade(cfg: CaseConfig, candidate: list[str], plan: StagePlan) -> list[str]:
+    """Walk the candidate coarse stages; for each, check the freshness
+    of its sub-stages via the artefact registry. If ALL sub-stages are
+    fresh, the coarse stage is skipped + recorded; otherwise the coarse
+    stage is kept (the run() function will resolve which sub-stages
+    actually execute).
+
+    Once any stage is added to the plan, all downstream stages are
+    automatically included — a fresh artefact downstream of a stale
+    one is meaningless, since re-running upstream will invalidate it.
+    """
+    # Local import to keep stages.py a leaf at the layering level.
+    from dsar_orchestrator.stages import STAGE_ARTEFACTS, is_artefact_fresh
+
+    result: list[str] = []
+    downstream_forced = False
+
+    for coarse_stage in candidate:
+        if downstream_forced:
+            result.append(coarse_stage)
+            continue
+
+        sub_stages = SUB_STAGES_BY_STAGE.get(coarse_stage, (coarse_stage,))
+        any_stale = False
+        for sub in sub_stages:
+            art = STAGE_ARTEFACTS.get(sub)
+            if art is None:
+                # Unregistered sub-stage — treat as always-run.
+                any_stale = True
+                break
+            fresh, _reason = is_artefact_fresh(cfg, art)
+            if not fresh:
+                any_stale = True
+                break
+
+        if any_stale:
+            result.append(coarse_stage)
+            downstream_forced = True
+        else:
+            plan.skipped.append((coarse_stage, "all sub-stage artefacts fresh"))
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────
