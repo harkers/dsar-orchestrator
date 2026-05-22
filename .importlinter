@@ -1,0 +1,56 @@
+[importlinter]
+root_packages =
+    dsar_orchestrator
+
+# The orchestrator is the consumer; toolkit modules are
+# imported lazily inside stage functions in pipeline.py.
+# Toolkit must never import from us.
+#
+# CI in the dsar-toolkit repo enforces the toolkit-side contract
+# (no `from dsar_orchestrator` imports there). This config covers
+# the orchestrator-internal layering: pipeline.py orchestrates;
+# the utility modules (hash_chain, audit, config) are leaves.
+
+[importlinter:contract:1]
+name = hash_chain is a leaf
+type = forbidden
+source_modules =
+    dsar_orchestrator.hash_chain
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.config
+
+[importlinter:contract:2]
+name = audit is a leaf
+type = forbidden
+source_modules =
+    dsar_orchestrator.audit
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.config
+
+[importlinter:contract:3]
+name = config is a leaf (may import exceptions)
+type = forbidden
+source_modules =
+    dsar_orchestrator.config
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.hash_chain
+
+[importlinter:contract:4]
+name = exceptions is a leaf
+type = forbidden
+source_modules =
+    dsar_orchestrator.exceptions
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.config
+    dsar_orchestrator.hash_chain

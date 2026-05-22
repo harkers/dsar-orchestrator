@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsar-orchestrator"
+version = "0.1.0"
+description = "Orchestrator for the harkers/dsar-toolkit modular DSAR processing stack"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Stuart Harker", email = "stuart.harker@datadna.co.uk"}]
+license = {text = "MIT"}
+
+dependencies = []
+# The orchestrator's utility code (hash_chain, audit, config, cli)
+# has no runtime deps beyond stdlib. Stages lazy-import toolkit
+# modules; install the `toolkit` extra (or `dsar-pipeline` directly)
+# to actually run a pipeline. This shape lets the orchestrator install
+# + test in isolation.
+
+[project.optional-dependencies]
+toolkit = [
+    # Install via `uv pip install -e ~/projects/dsar-toolkit/` in dev.
+    # Not pinned by PyPI version since dsar-toolkit isn't published yet.
+    "dsar-pipeline >= 0.2.0",
+]
+dev = [
+    "pytest >= 8.0",
+    "pytest-cov >= 5.0",
+    "import-linter >= 2.0",
+    "ruff >= 0.4",
+]
+
+[project.scripts]
+dsar-pipeline = "dsar_orchestrator.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "needs_toolkit: test requires dsar-pipeline (dsar-toolkit) installed",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harkers/dsar-orchestrator/blob/main/docs/audit_schemas/pipeline.schema.json",
+  "title": "pipeline.jsonl row",
+  "description": "One JSON line per row in ~/.dsar-audit/<case>/pipeline.jsonl. Emitted by the orchestrator's PipelineAuditor + StageBanner. See docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v2.md § Cross-cutting consistency.",
+  "type": "object",
+  "required": ["event", "schema_version", "producer_version", "case"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "producer_version": {
+      "type": "string",
+      "description": "e.g. 'dsar_orchestrator 0.1.0'"
+    },
+    "case": {
+      "type": "string",
+      "description": "Case number"
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "stage_start",
+        "stage_end",
+        "stage_skipped",
+        "note",
+        "run_complete"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "ingest",
+        "stage_2_parallel",
+        "stage_3_parallel",
+        "scope_classify",
+        "pii_classify",
+        "redact",
+        "redact_verify",
+        "export"
+      ]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["ok", "failed"]
+    },
+    "reason": {
+      "type": "string",
+      "description": "For stage_skipped events"
+    },
+    "kind": {
+      "type": "string",
+      "description": "For note events"
+    },
+    "message": {
+      "type": "string"
+    },
+    "error_type": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "stages_run": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "stages_skipped": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "halted": {"type": "boolean"},
+    "halt_reason": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"const": "stage_start"}}},
+      "then": {"required": ["stage", "ts"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "stage_end"}}},
+      "then": {"required": ["stage", "ts", "duration_s", "outcome"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "stage_skipped"}}},
+      "then": {"required": ["stage", "reason"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "run_complete"}}},
+      "then": {"required": ["started_at", "finished_at", "duration_s"]}
+    }
+  ]
+}

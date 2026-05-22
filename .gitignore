@@ -1,28 +1,26 @@
-# macOS
-.DS_Store
 
-# Python
 __pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-.pytest_cache/
 .coverage
 .coverage.*
-htmlcov/
+.DS_Store
+.idea/
 .mypy_cache/
+.pytest_cache/
 .ruff_cache/
+.serena/
 .tox/
 .venv/
-venv/
-env/
-
-# editor
 .vscode/
-.idea/
-*.swp
+*.egg-info/
+*.py[cod]
 *.swo
-
+*.swp
+# editor
 # IDE / tooling
-.serena/
+# macOS
+# Python
+build/
+dist/
+env/
+htmlcov/
+venv/
