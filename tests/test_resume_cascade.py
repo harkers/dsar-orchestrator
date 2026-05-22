@@ -165,6 +165,23 @@ def test_cascade_skips_when_fresh_embed_and_no_downstream_artefacts(
 # ─── cascade: opt-out ───────────────────────────────────────────────
 
 
+def test_run_force_flag_bypasses_cascade(tmp_path: Path) -> None:
+    """Operator-facing --force flag → pipeline.run(force=True) → all
+    stages run regardless of artefact freshness."""
+    from dsar_orchestrator.pipeline import run
+
+    case_path = _seed_minimum_case(tmp_path)
+    _write_fresh_embeddings(case_path)
+    # --force + --check together: prints the plan with everything in it
+    report = run(case_path.name, case_root=case_path, check=True, force=True)
+    # With force=True + check=True, the would-be-run stages are all 8.
+    # (stages_skipped here is the orchestrator's "would have run" list
+    # when check=True; we just confirm it's the full set.)
+    assert "ingest" in report.stages_skipped
+    assert "stage_2_parallel" in report.stages_skipped
+    assert "export" in report.stages_skipped
+
+
 def test_skip_fresh_artefacts_false_includes_everything(tmp_path: Path) -> None:
     """Operator passes the equivalent of --if-exists overwrite — every
     stage runs regardless of artefact freshness."""

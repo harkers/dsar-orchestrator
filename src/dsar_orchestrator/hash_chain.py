@@ -79,20 +79,33 @@ def read_recorded_hash(artefact_path: Path) -> str:
     read the first row and trust it; rows in a single artefact share
     the same upstream hash (they all derive from the same upstream).
 
-    For single-row artefacts or header-only artefacts, the convention
-    is identical — the first JSON object on the first line.
+    For ``.jsonl`` files the convention is: the first JSON object on
+    the first line carries the hash (every row should share the same
+    value). For ``.json`` files (single-object, often pretty-printed
+    across multiple lines) the whole file is parsed.
     """
     if not artefact_path.exists():
         raise FileNotFoundError(f"Artefact missing: {artefact_path}")
-    with open(artefact_path) as f:
-        first_line = f.readline().strip()
-    if not first_line:
-        raise UpstreamHashMismatch(f"Artefact {artefact_path} is empty; cannot read upstream_hash")
-    row = json.loads(first_line)
+
+    if artefact_path.suffix == ".jsonl":
+        with open(artefact_path) as f:
+            first_line = f.readline().strip()
+        if not first_line:
+            raise UpstreamHashMismatch(
+                f"Artefact {artefact_path} is empty; cannot read upstream_hash"
+            )
+        row = json.loads(first_line)
+    else:
+        # .json or unknown — parse the whole file as a single object.
+        try:
+            row = json.loads(artefact_path.read_text())
+        except json.JSONDecodeError as e:
+            raise UpstreamHashMismatch(f"Artefact {artefact_path} is not valid JSON: {e}") from e
+
     if "upstream_hash" not in row:
         raise UpstreamHashMismatch(
-            f"Artefact {artefact_path} has no `upstream_hash` field on its "
-            f"first row. Likely written by a non-orchestrator-aware tool. "
+            f"Artefact {artefact_path} has no `upstream_hash` field. "
+            f"Likely written by a non-orchestrator-aware tool. "
             f"Re-run the producing stage."
         )
     return row["upstream_hash"]

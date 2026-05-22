@@ -321,16 +321,27 @@ def run(
     only_stage: str | None = None,
     dry_run: bool = False,
     check: bool = False,
+    force: bool = False,
 ) -> RunReport:
     """Orchestrate a full DSAR case run.
 
     See ``docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v2.md``
     § "Full pipeline.run() pseudocode" for the authoritative behaviour.
+
+    ``force`` disables the resume cascade — every in-scope stage runs
+    regardless of artefact freshness.
     """
     cfg = load_case_config(case_no, case_root=case_root)
     validate_phase_4_prereqs(cfg)
 
-    plan = build_stage_plan(cfg.case_path, cfg, from_stage, through_stage, only_stage)
+    plan = build_stage_plan(
+        cfg.case_path,
+        cfg,
+        from_stage,
+        through_stage,
+        only_stage,
+        skip_fresh_artefacts=not force,
+    )
 
     if check or dry_run:
         # Print the plan; do not run.

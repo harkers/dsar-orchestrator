@@ -72,6 +72,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Same as --check; print the plan and exit.",
     )
     p.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Disable the resume cascade — run every in-scope stage even "
+            "if its artefacts look fresh. Equivalent to --if-exists "
+            "overwrite on every sub-stage's CLI."
+        ),
+    )
+    p.add_argument(
         "--version",
         action="version",
         version=f"dsar-pipeline (dsar_orchestrator) {__version__}",
@@ -95,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             only_stage=args.only_stage,
             dry_run=args.dry_run,
             check=args.check,
+            force=args.force,
         )
     except PipelineHalt as e:
         print(f"\nPIPELINE HALTED: {e}", file=sys.stderr)

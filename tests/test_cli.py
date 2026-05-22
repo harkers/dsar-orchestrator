@@ -57,3 +57,15 @@ def test_parser_only_stage() -> None:
     p = build_parser()
     args = p.parse_args(["--case", "300001", "--only", "embed"])
     assert args.only_stage == "embed"
+
+
+def test_parser_force_flag_defaults_false() -> None:
+    p = build_parser()
+    args = p.parse_args(["--case", "300001"])
+    assert args.force is False
+
+
+def test_parser_force_flag_set() -> None:
+    p = build_parser()
+    args = p.parse_args(["--case", "300001", "--force"])
+    assert args.force is True
