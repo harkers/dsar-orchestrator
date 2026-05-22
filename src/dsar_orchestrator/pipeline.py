@@ -15,8 +15,11 @@ actually run against a case that needs the missing toolkit module.
 from __future__ import annotations
 
 import importlib
+import json
+import os
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
@@ -214,19 +217,121 @@ def _lazy_import(module_path: str):
         ) from e
 
 
+def _try_lazy_import(module_path: str):
+    """Same as _lazy_import but returns None instead of raising when the
+    module isn't installed. Used by the per-stage agent check so the
+    pipeline degrades gracefully when a stage has no agent yet."""
+    try:
+        return importlib.import_module(module_path)
+    except ImportError:
+        return None
+
+
+def _check_module_work(cfg: CaseConfig, sub_stage: str) -> None:
+    """Invoke the toolkit's per-module agent to validate the work that
+    just finished.
+
+    Convention (locked by the orchestration spec):
+        dsar_pipeline.module_agents.<sub_stage>
+            check_work(case_path: Path) -> ModuleCheckResult
+                .ok: bool
+                .severity: "info" | "warning" | "critical"
+                .findings: list[str]
+                .recommendation: str
+
+    If the agent's check returns ``ok=False`` with severity=critical,
+    the orchestrator raises ``PipelineHalt`` immediately. Lesser
+    severities are appended to ~/.dsar-audit/<case>/module_checks.jsonl
+    for the log analyser to pick up.
+
+    If the toolkit doesn't ship an agent for this sub-stage, the check
+    degrades to a single audit-log warning so the operator knows the
+    stage ran unverified — but the pipeline does NOT halt. (Agents
+    will roll in across the toolkit; we can't block on their absence
+    today.)
+    """
+    audit_path = Path.home() / ".dsar-audit" / cfg.case_no / "module_checks.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    agent = _try_lazy_import(f"dsar_pipeline.module_agents.{sub_stage}")
+    if agent is None:
+        # No agent shipped for this stage — record the gap, don't halt.
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "sub_stage": sub_stage,
+            "outcome": "no_agent",
+            "severity": "info",
+            "message": (
+                f"No module agent registered for {sub_stage!r}; "
+                f"stage ran unverified. Add dsar_pipeline.module_agents."
+                f"{sub_stage} to enable validation."
+            ),
+            "schema_version": "1.0",
+            "producer_version": f"dsar_orchestrator {__import__('dsar_orchestrator').__version__}",
+        }
+        with open(audit_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return
+
+    check_fn = getattr(agent, "check_work", None)
+    if check_fn is None:
+        # Agent module exists but doesn't expose the contract — record
+        # this as a critical issue (the toolkit ships a partial agent).
+        raise PipelineHalt(
+            f"case={cfg.case_no}: module agent "
+            f"dsar_pipeline.module_agents.{sub_stage} is missing "
+            f"`check_work(case_path)`. Re-installed dsar-toolkit may "
+            f"have shipped a partial agent module."
+        )
+
+    result = check_fn(cfg.case_path)
+    severity = getattr(result, "severity", "info")
+    ok = getattr(result, "ok", True)
+    findings = list(getattr(result, "findings", []))
+    recommendation = getattr(result, "recommendation", "")
+
+    row = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "sub_stage": sub_stage,
+        "ok": ok,
+        "severity": severity,
+        "findings": findings,
+        "recommendation": recommendation,
+        "schema_version": "1.0",
+        "producer_version": f"dsar_orchestrator {__import__('dsar_orchestrator').__version__}",
+    }
+    with open(audit_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+    if not ok and severity == "critical":
+        raise PipelineHalt(
+            f"case={cfg.case_no}: module agent for {sub_stage!r} "
+            f"flagged a critical issue: {findings!r}. "
+            f"Recommendation: {recommendation or '(none)'}. "
+            f"Full log: {audit_path}."
+        )
+
+
 def _run_ingest(cfg: CaseConfig) -> None:
     ingest = _lazy_import("dsar_pipeline.ingest")
     ingest.run(cfg.case_path)
+    _check_module_work(cfg, "ingest")
 
 
 def _run_embed(cfg: CaseConfig) -> None:
     embed_core = _lazy_import("dsar_embed.core")
     embed_core.embed_corpus(cfg.case_path)
+    _check_module_work(cfg, "embed")
 
 
 def _run_detect_2_1_to_2_4(cfg: CaseConfig) -> None:
     detect = _lazy_import("dsar_pipeline.detect")
     detect.run_2_1_to_2_4(cfg.case_path)
+    _check_module_work(cfg, "detect_2_1_to_2_4")
 
 
 def _run_pii_discovery(cfg: CaseConfig) -> None:
@@ -234,17 +339,20 @@ def _run_pii_discovery(cfg: CaseConfig) -> None:
         return
     pii_discovery = _lazy_import("dsar_pii_discovery.core")
     pii_discovery.discover_entities(cfg.case_path)
+    _check_module_work(cfg, "pii_discovery")
 
 
 def _run_people_register(cfg: CaseConfig) -> None:
     pr = _lazy_import("dsar_pipeline.people_register")
     pr.run(cfg.case_path)
+    _check_module_work(cfg, "people_register")
 
 
 def _run_scope_filter_chain(cfg: CaseConfig) -> None:
     """Stage 3's chained scope_prefilter → dsar_rerank branch."""
     detect = _lazy_import("dsar_pipeline.detect")
     detect.run_scope_prefilter(cfg.case_path)
+    _check_module_work(cfg, "scope_prefilter")
     if cfg.rerank_mode != "off":
         rerank_core = _lazy_import("dsar_rerank.core")
         rerank_core.rerank_case(
@@ -254,11 +362,13 @@ def _run_scope_filter_chain(cfg: CaseConfig) -> None:
             top_n=cfg.rerank_top_n,
             sample_rate=cfg.rerank_sample_rate,
         )
+        _check_module_work(cfg, "rerank")
 
 
 def _run_scope_classify(cfg: CaseConfig) -> None:
     detect = _lazy_import("dsar_pipeline.detect")
     detect.run_scope_classify(cfg.case_path)
+    _check_module_work(cfg, "scope_classify")
 
 
 def _run_pii_classify(cfg: CaseConfig) -> None:
@@ -276,6 +386,7 @@ def _run_pii_classify(cfg: CaseConfig) -> None:
         if type(e).__name__ == "PIIBudgetExceeded":
             raise BudgetExceededError(str(e)) from e
         raise
+    _check_module_work(cfg, "pii_classify")
 
 
 def _run_redact(cfg: CaseConfig) -> None:
@@ -285,6 +396,7 @@ def _run_redact(cfg: CaseConfig) -> None:
         prefer_llm_entities=(cfg.pii_classify_mode == "enforce"),
         respect_dispute_halts=True,
     )
+    _check_module_work(cfg, "redact")
 
 
 def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
@@ -299,12 +411,14 @@ def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
             f"See ~/.dsar-audit/{cfg.case_no}/redact_verify.jsonl. "
             f"Re-run after fixing: dsar-pipeline --case {cfg.case_no} --from redact"
         )
+    _check_module_work(cfg, "redact_verify")
     return None
 
 
 def _run_export(cfg: CaseConfig) -> None:
     export = _lazy_import("dsar_pipeline.export")
     export.run(cfg.case_path)
+    _check_module_work(cfg, "export")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -322,6 +436,7 @@ def run(
     dry_run: bool = False,
     check: bool = False,
     force: bool = False,
+    acknowledge_issues: bool = False,
 ) -> RunReport:
     """Orchestrate a full DSAR case run.
 
@@ -330,9 +445,32 @@ def run(
 
     ``force`` disables the resume cascade — every in-scope stage runs
     regardless of artefact freshness.
+
+    ``acknowledge_issues`` clears any analyser block flag from a
+    previous ``dsar-analyse-logs`` run and proceeds. Operator-facing;
+    the orchestrator refuses to start when a block is present
+    otherwise.
     """
     cfg = load_case_config(case_no, case_root=case_root)
     validate_phase_4_prereqs(cfg)
+
+    # Analyser block gate — only checked for real runs (not --check).
+    if not (check or dry_run):
+        from dsar_orchestrator.log_analyser.core import clear_block, is_blocked
+
+        if is_blocked(case_no):
+            if acknowledge_issues:
+                clear_block(case_no)
+            else:
+                raise DSARPipelineError(
+                    f"case={case_no} is under an analyser block. "
+                    f"Inspect ~/.dsar-audit/{case_no}/analysis.md and either:\n"
+                    f"  - fix the critical findings, then "
+                    f"`dsar-analyse-logs --case {case_no}` (clean run "
+                    f"removes the block automatically), or\n"
+                    f"  - `dsar-pipeline --case {case_no} "
+                    f"--acknowledge-issues` to proceed anyway."
+                )
 
     plan = build_stage_plan(
         cfg.case_path,

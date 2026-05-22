@@ -69,3 +69,15 @@ def test_parser_force_flag_set() -> None:
     p = build_parser()
     args = p.parse_args(["--case", "300001", "--force"])
     assert args.force is True
+
+
+def test_parser_acknowledge_issues_defaults_false() -> None:
+    p = build_parser()
+    args = p.parse_args(["--case", "300001"])
+    assert args.acknowledge_issues is False
+
+
+def test_parser_acknowledge_issues_set() -> None:
+    p = build_parser()
+    args = p.parse_args(["--case", "300001", "--acknowledge-issues"])
+    assert args.acknowledge_issues is True

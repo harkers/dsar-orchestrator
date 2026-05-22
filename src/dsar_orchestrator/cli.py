@@ -81,6 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--acknowledge-issues",
+        action="store_true",
+        help=(
+            "Clear any analyser block flag from a prior "
+            "`dsar-analyse-logs` run and proceed. Without this, "
+            "the orchestrator refuses to start when a block is present."
+        ),
+    )
+    p.add_argument(
         "--version",
         action="version",
         version=f"dsar-pipeline (dsar_orchestrator) {__version__}",
@@ -105,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             check=args.check,
             force=args.force,
+            acknowledge_issues=args.acknowledge_issues,
         )
     except PipelineHalt as e:
         print(f"\nPIPELINE HALTED: {e}", file=sys.stderr)
