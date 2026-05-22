@@ -28,6 +28,18 @@ def _write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, indent=2))
 
 
+def _read_case_scope(case_path: Path) -> str:
+    """Read case_scope from case_config.json, falling back to the
+    pre-synthesis default so old fixtures keep working."""
+    cfg_path = case_path / "case_config.json"
+    if not cfg_path.exists():
+        return "test scope"
+    try:
+        return json.loads(cfg_path.read_text()).get("case_scope", "test scope")
+    except json.JSONDecodeError:
+        return "test scope"
+
+
 # ─── ingest ────────────────────────────────────────────────────────
 
 
@@ -192,7 +204,8 @@ def make_rerank_core_stub() -> types.ModuleType:
 
         cosine_hash = sha256_file(cosine_path)
         upstream = sha256_text(
-            f"{cosine_hash}\x1ftest scope\x1fthr={threshold}\x1ftopN={top_n}\x1fmode={mode}"
+            f"{cosine_hash}\x1f{_read_case_scope(case_path)}\x1f"
+            f"thr={threshold}\x1ftopN={top_n}\x1fmode={mode}"
         )
         rows = []
         cosine_rows = [
@@ -265,7 +278,7 @@ def make_pii_discovery_stub() -> types.ModuleType:
 
         register_path = case_path / "working" / "register.json"
         register_hash = compute_register_hash(register_path)
-        upstream = sha256_text(f"{register_hash}\x1ftest scope")
+        upstream = sha256_text(f"{register_hash}\x1f{_read_case_scope(case_path)}")
         register = json.loads(register_path.read_text())
         rows = []
         for entry in register["refs"]:

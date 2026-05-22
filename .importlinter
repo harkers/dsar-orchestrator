@@ -92,3 +92,21 @@ forbidden_modules =
     dsar_orchestrator.log_analyser
     dsar_orchestrator.stages
     dsar_orchestrator.hash_chain
+
+[importlinter:contract:8]
+name = synthesis is a leaf (may transitively touch exceptions only)
+type = forbidden
+source_modules =
+    dsar_orchestrator.synthesis
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.config
+    dsar_orchestrator.hash_chain
+    dsar_orchestrator.stages
+    dsar_orchestrator.module_agents
+    dsar_orchestrator.log_analyser
+# exceptions deliberately allowed: the synthesis CLI imports
+# __version__ from the package, which transitively loads exceptions.
+# Since exceptions is itself a leaf, there's no architectural concern.

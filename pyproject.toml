@@ -34,6 +34,7 @@ dev = [
 [project.scripts]
 dsar-pipeline = "dsar_orchestrator.cli:main"
 dsar-analyse-logs = "dsar_orchestrator.log_analyser.cli:main"
+dsar-synthesize-case = "dsar_orchestrator.synthesis.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
