@@ -7,7 +7,7 @@ failures, and use the analyser to push back on suspect runs.
 
 | Command | What it does |
 |---|---|
-| `dsar-pipeline --case <no>` | Run (or resume) the full 8-stage pipeline for a case |
+| `dsar-conductor --case <no>` | Run (or resume) the full 8-stage pipeline for a case |
 | `dsar-analyse-logs --case <no>` | Ask the local LLM (via mlx-broker) to review the case's audit logs and surface issues |
 
 Both are read-only by default with the right flags (`--check`,
@@ -38,14 +38,14 @@ cat > ~/dsars/cases/300100/case_config.json <<'EOF'
 EOF
 
 # 2. Preview the resume plan
-dsar-pipeline --case 300100 --check
+dsar-conductor --case 300100 --check
 #   Case 300100 resume plan:
 #     ✗ ingest                → will run
 #     ✗ stage_2_parallel      → will run
 #     ...
 
 # 3. Run it
-dsar-pipeline --case 300100
+dsar-conductor --case 300100
 #   [...] stage=ingest             start
 #   [...] stage=ingest             done in 87s
 #   [...] stage=stage_2_parallel   start  (parallel: embed + detect + pii-discovery)
@@ -62,7 +62,7 @@ The cascade detects what's already done by reading each artefact's
 
 ```bash
 # Inspect what would re-run
-dsar-pipeline --case 300100 --check
+dsar-conductor --case 300100 --check
 #     ✓ ingest                (all sub-stage artefacts fresh)
 #     ✓ stage_2_parallel      (all sub-stage artefacts fresh)
 #     ✗ stage_3_parallel      → will run    (something stale here)
@@ -70,14 +70,14 @@ dsar-pipeline --case 300100 --check
 #     ...
 
 # Just keep going — same command, picks up where it left off
-dsar-pipeline --case 300100
+dsar-conductor --case 300100
 ```
 
 ### Re-do one stage
 
 ```bash
 # Re-embed only; downstream cascade picks up the change automatically
-dsar-pipeline --case 300100 --only embed
+dsar-conductor --case 300100 --only embed
 
 # Or use the module's own CLI when it ships in the toolkit:
 dsar-embed --case 300100 --if-exists overwrite
@@ -87,37 +87,37 @@ dsar-embed --case 300100 --if-exists overwrite
 
 ```bash
 # Disable the cascade; run every in-scope stage regardless of freshness
-dsar-pipeline --case 300100 --force
+dsar-conductor --case 300100 --force
 ```
 
 ### Stop after a particular stage
 
 ```bash
 # Quick smoke: run only up through scope-classify; don't redact yet
-dsar-pipeline --case 300100 --through scope_classify
+dsar-conductor --case 300100 --through scope_classify
 ```
 
 ### Resume from a particular stage
 
 ```bash
 # Re-do everything from redact onward (e.g., after fixing redact.py)
-dsar-pipeline --case 300100 --from redact
+dsar-conductor --case 300100 --from redact
 ```
 
 ## When the analyser blocks you
 
 `dsar-analyse-logs` reads all the audit logs for a case and asks a
 local LLM via mlx-broker to identify issues. If it finds anything
-critical, it drops a block flag the next `dsar-pipeline` run will
+critical, it drops a block flag the next `dsar-conductor` run will
 refuse to start through:
 
 ```bash
-$ dsar-pipeline --case 300100
+$ dsar-conductor --case 300100
 ERROR: case=300100 is under an analyser block.
 Inspect ~/.dsar-audit/300100/analysis.md and either:
   - fix the critical findings, then `dsar-analyse-logs --case 300100`
     (clean run removes the block automatically), or
-  - `dsar-pipeline --case 300100 --acknowledge-issues` to proceed anyway.
+  - `dsar-conductor --case 300100 --acknowledge-issues` to proceed anyway.
 ```
 
 Three ways to clear it:
@@ -133,7 +133,7 @@ dsar-analyse-logs --case 300100
 dsar-analyse-logs --case 300100 --clear-block
 
 # 3. Acknowledge inline + proceed with the pipeline
-dsar-pipeline --case 300100 --acknowledge-issues
+dsar-conductor --case 300100 --acknowledge-issues
 ```
 
 The analyser never reads document content. It works only from the
@@ -187,7 +187,7 @@ Inspect the chain:
 
 ```bash
 # Confirm where the cascade would resume from
-dsar-pipeline --case 300100 --check
+dsar-conductor --case 300100 --check
 
 # See exactly why a stage is marked stale (look in module_checks.jsonl
 # + check the upstream_hash field on each artefact)

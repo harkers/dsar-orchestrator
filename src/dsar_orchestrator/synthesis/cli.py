@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  truth:  {result.case_path / 'synthetic_truth.json'}")
     print()
     print("To run the pipeline against this case:")
-    print(f"  dsar-pipeline --case {result.case_no} --case-root {result.case_path} --check")
+    print(f"  dsar-conductor --case {result.case_no} --case-root {result.case_path} --check")
     return 0
 
 

@@ -82,7 +82,7 @@ def _ok(findings: list[str] | None = None) -> ModuleCheckResult:
 
 
 def _rerun_hint(sub_stage: str, case_no: str) -> str:
-    return f"Re-run with: dsar-pipeline --case {case_no} --only {sub_stage} --force"
+    return f"Re-run with: dsar-conductor --case {case_no} --only {sub_stage} --force"
 
 
 # ─── ingest ─────────────────────────────────────────────────────────

@@ -1,9 +1,14 @@
-"""``dsar-pipeline`` — operator CLI for the orchestrator.
+"""``dsar-conductor`` — operator CLI for the orchestrator.
 
 Thin argparse wrapper around ``pipeline.run()``. Per the orchestration
 spec, the CLI and the in-process orchestrator share a single
 implementation; this module only handles argument parsing + presenting
 errors to the operator.
+
+The CLI is named ``dsar-conductor`` (not ``dsar-pipeline``) to avoid
+clashing with the toolkit's own ``dsar-pipeline`` entry-point. Our
+conductor sits ABOVE the toolkit's stages, adding the resume cascade,
+log analyser, and per-module agent validation.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from dsar_orchestrator.pipeline import ALL_STAGE_NAMES, STAGE_ORDER, run
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dsar-pipeline",
+        prog="dsar-conductor",
         description=("Orchestrate a DSAR case run through the dsar-toolkit modular pipeline."),
     )
     p.add_argument(
@@ -92,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--version",
         action="version",
-        version=f"dsar-pipeline (dsar_orchestrator) {__version__}",
+        version=f"dsar-conductor (dsar_orchestrator) {__version__}",
     )
     return p
 

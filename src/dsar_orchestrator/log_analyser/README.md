@@ -20,7 +20,7 @@ No external API calls.
    `~/.dsar-audit/<case>/analysis.jsonl` + `analysis.md`.
 5. If any **critical** finding is present, drops
    `~/.dsar-audit/<case>/analysis-block.flag`. The orchestrator's
-   next `dsar-pipeline --case <no>` refuses to start until the flag
+   next `dsar-conductor --case <no>` refuses to start until the flag
    is cleared (`--acknowledge-issues` or
    `dsar-analyse-logs --case <no> --clear-block`).
 

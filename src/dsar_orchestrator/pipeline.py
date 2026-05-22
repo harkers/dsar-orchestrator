@@ -359,7 +359,7 @@ def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
             f"{verdict.failed_doc_count} doc(s) flagged "
             f"({verdict.failed_verifier_summary}). "
             f"See ~/.dsar-audit/{cfg.case_no}/redact_verify.jsonl. "
-            f"Re-run after fixing: dsar-pipeline --case {cfg.case_no} --from redact"
+            f"Re-run after fixing: dsar-conductor --case {cfg.case_no} --from redact"
         )
     _check_module_work(cfg, "redact_verify")
     return None
@@ -418,7 +418,7 @@ def run(
                     f"  - fix the critical findings, then "
                     f"`dsar-analyse-logs --case {case_no}` (clean run "
                     f"removes the block automatically), or\n"
-                    f"  - `dsar-pipeline --case {case_no} "
+                    f"  - `dsar-conductor --case {case_no} "
                     f"--acknowledge-issues` to proceed anyway."
                 )
 

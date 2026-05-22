@@ -32,7 +32,12 @@ dev = [
 ]
 
 [project.scripts]
-dsar-pipeline = "dsar_orchestrator.cli:main"
+# `dsar-conductor` is the operator-facing CLI; we deliberately don't
+# claim the `dsar-pipeline` name to avoid clashing with the toolkit's
+# own `dsar-pipeline` entry-point. Our conductor sits ABOVE the
+# toolkit's stages, adding the resume cascade, log analyser, and
+# per-module agent validation.
+dsar-conductor = "dsar_orchestrator.cli:main"
 dsar-analyse-logs = "dsar_orchestrator.log_analyser.cli:main"
 dsar-synthesize-case = "dsar_orchestrator.synthesis.cli:main"
 

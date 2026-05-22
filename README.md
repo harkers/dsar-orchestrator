@@ -45,7 +45,7 @@ Split because:
 | `docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v<N>.md` | Authoritative orchestration design. Versioned per the iterated-spec convention. |
 | `src/dsar_orchestrator/pipeline.py` | The actual `pipeline.run(case, …)` function. |
 | `src/dsar_orchestrator/hash_chain.py` | `upstream_hash` compute + verify utilities. Shared by all artefact reads/writes the orchestrator drives. |
-| `src/dsar_orchestrator/cli.py` | `dsar-pipeline` operator CLI: `--case`, `--from`, `--through`, `--only`, `--check`, `--dry-run`. |
+| `src/dsar_orchestrator/cli.py` | `dsar-conductor` operator CLI: `--case`, `--from`, `--through`, `--only`, `--check`, `--dry-run`. |
 | `src/dsar_orchestrator/audit.py` | Writes `pipeline.jsonl` per-case audit log (stage banners, durations, outcomes). |
 | `tests/` | Orchestrator unit + integration tests. |
 | `docs/audit_schemas/pipeline.schema.json` | Schema for the per-case pipeline audit log. |
@@ -77,7 +77,7 @@ pip install -e ~/projects/dsar-toolkit       # the modules
 pip install -e ~/projects/dsar-orchestrator  # the conductor
 ```
 
-After install, `dsar-pipeline --case <no>` is the operator's entry
+After install, `dsar-conductor --case <no>` is the operator's entry
 point. Module-level CLIs (`dsar-embed`, `dsar-rerank`, …) come from
 the toolkit install and remain available for surgical re-runs.
 

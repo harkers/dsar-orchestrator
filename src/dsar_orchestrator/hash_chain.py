@@ -130,7 +130,7 @@ def verify_upstream(
         instr = rerun_instruction or (
             f"Re-run the stage that produces {artefact_path.name} "
             f"with --if-exists overwrite, or pass --from <upstream-stage> "
-            f"to dsar-pipeline."
+            f"to dsar-conductor."
         )
         raise UpstreamHashMismatch(
             f"Upstream changed since {artefact_path} was written.\n"

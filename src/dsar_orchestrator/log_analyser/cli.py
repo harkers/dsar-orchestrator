@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     if report.has_blocking_issues:
         print(
             f"\nBLOCK: {len(report.critical)} critical finding(s); "
-            f"next `dsar-pipeline --case {args.case}` will refuse to "
+            f"next `dsar-conductor --case {args.case}` will refuse to "
             f"start without --acknowledge-issues.",
             file=sys.stderr,
         )

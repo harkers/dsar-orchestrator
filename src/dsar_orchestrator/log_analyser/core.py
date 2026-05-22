@@ -171,7 +171,7 @@ def _write_outputs(case_dir: Path, report: AnalysisReport) -> None:
         flag_text = (
             f"BLOCK: {len(report.critical)} critical finding(s) in "
             f"{case_dir}/analysis.md\n"
-            f"To proceed despite the block: `dsar-pipeline --case "
+            f"To proceed despite the block: `dsar-conductor --case "
             f"{report.case_no} --acknowledge-issues`.\n"
         )
         flag_path.write_text(flag_text, encoding="utf-8")

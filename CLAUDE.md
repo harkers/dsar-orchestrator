@@ -27,7 +27,7 @@ dsar-orchestrator/
 │       ├── __init__.py
 │       ├── pipeline.py    # pipeline.run(case, …)
 │       ├── hash_chain.py  # upstream_hash compute + verify
-│       ├── cli.py         # `dsar-pipeline` entry point
+│       ├── cli.py         # `dsar-conductor` entry point
 │       └── audit.py       # pipeline.jsonl writer
 ├── tests/
 └── docs/
