@@ -174,43 +174,83 @@ in `working/`, never reaches `output/`.
 
 ## The optimal flow
 
-For a single case, per the dependency graph:
+For a single case, per the dependency graph (all 7 toolkit phases):
 
 ```
-Stage 1.  ingest                                            (serial)
+Stage 1.  ingest                                                    (serial)
                 ↓
-Stage 2.  parallel: { dsar-embed  ;  detect-2.1-2.4 }       (parallel; join)
+Stage 2.  parallel: { dsar-embed (Ph1)
+                    ; detect-2.1-2.4
+                    ; dsar-pii-discovery (Ph5/A) }                  (3-way parallel; join)
                 ↓
 Stage 3.  parallel: { people_register
-                    ; scope_prefilter → dsar-rerank }       (parallel; join)
+                    ; scope_prefilter → dsar-rerank (Ph2) }         (parallel; join)
                 ↓
-Stage 4.  detect-2.5 LLM scope-classify
-          (gated by the global LLM concurrency semaphore)   (serial; rate-gated)
+Stage 4.  detect-2.5 LLM scope-classify (Sonnet 4.6)
+          (gated by global LLM concurrency semaphore)               (serial; rate-gated)
                 ↓
-Stage 5.  redact                                            (serial)
+Stage 5.  dsar-pii-classify (Ph4 — Haiku 4.5)
+          (gated by same semaphore; shadow/enforce mode applies)    (serial; rate-gated)
                 ↓
-Stage 6.  export                                            (serial)
+Stage 6.  redact
+          (entity-source preference: spaCy in shadow,
+           LLM-extracted in enforce)                                (serial)
+                ↓
+Stage 7.  dsar-redact-verify (Ph6/B)
+          (halts pipeline on any verifier failure;
+           case stays in working/, not promoted)                    (serial; halt-on-fail)
+                ↓
+Stage 8.  export                                                    (serial)
 ```
 
 "Optimal" here means: stages 2 and 3 are the only legitimate
-parallelism wins. Inside Stage 2, embedding takes minutes (compute-
-bound on the M5 Max GPU via TEI) and detect-2.1-2.4 takes minutes
-(spaCy + regex CPU-bound + occasional CloakLLM HTTP). Running them
-concurrently roughly halves the pre-LLM wall-clock. Inside Stage 3,
-people_register's numpy-vectorised cosine matrix is GPU-light and
-finishes in seconds; scope_prefilter + rerank also seconds; making
-them parallel is cheap insurance.
+parallelism wins. Inside Stage 2, three branches run concurrently:
+- **dsar-embed** (Phase 1) — minutes, GPU-bound via TEI :8085
+- **detect-2.1-2.4** — minutes, CPU-bound (spaCy + regex)
+- **dsar-pii-discovery** (Phase 5/A) — minutes, mostly CPU-bound
+  with the GLiNER engine taking the largest share
 
-Stages 1, 4, 5, 6 must be serial — Stage 4 because it's the
-sync barrier, Stages 1+5+6 because they're inherently sequential
-file ops on the case bundle.
+Three-way parallelism on Stage 2 cuts the pre-LLM wall-clock to
+roughly the longest single branch instead of their sum.
+
+Inside Stage 3, people_register's numpy-vectorised cosine matrix
+is GPU-light and finishes in seconds; scope_prefilter + rerank
+also seconds; making them parallel is cheap insurance against
+either growing.
+
+Stages 1, 4, 5, 6, 7, 8 must be serial:
+- **Stage 4** is the sync barrier for the Stage 2 + 3 fans.
+- **Stage 5** depends on Stage 4's in-scope verdict.
+- **Stages 6-8** are inherently sequential file operations on
+  the case bundle (redact reads tags, verify reads redacted,
+  export reads verified).
 
 ### Across cases (batch processing)
 
 Each case is independent at the filesystem level. Multiple cases
 can run their full pipelines concurrently. The only shared
-resource is the **Anthropic Claude API** hit at Stage 4 (LLM
-scope-classify). See "Rate-limit handling" below.
+resource is the **Anthropic Claude API** hit at Stage 4 + 5 (LLM
+scope-classify and LLM PII-classify). Both flow through the same
+`dsar_pipeline.llm_router` semaphore — see "Rate-limit handling"
+below.
+
+### Phase enablement
+
+Phases 4, 5, 6 can be disabled per-case via env vars or case
+config — but defaults to **all-enabled** (in `shadow` mode for
+Ph2 + Ph4 until promoted):
+
+| Env var | Default | Effect when off |
+|---|---|---|
+| `RERANK_MODE` | `shadow` | `off` = skip Stage 3's rerank branch |
+| `PII_CLASSIFY_MODE` | `shadow` | `off` = skip Stage 5 entirely |
+| `DISCOVERY_ENABLED` | `true` | `false` = drop Stage 2's pii-discovery branch |
+| `REDACT_VERIFY_ENABLED` | `true` | `false` = skip Stage 7 (NOT recommended; only for debug) |
+
+Disabling Stage 7 in production is operationally discouraged —
+it's the last line of defence before client-visible output. The
+env var exists for debugging when verify is broken; it should be
+back to `true` before any case ships.
 
 ---
 
@@ -266,6 +306,253 @@ both call into the same `core.<fn>(case)`.
 
 ---
 
+## Full `pipeline.run()` pseudocode
+
+The authoritative reference for what
+`dsar_orchestrator.pipeline.run()` does, end-to-end, with all 7
+toolkit phases wired in. This is design pseudocode, not the
+actual code — but the structure is what implementation should
+match.
+
+```python
+# src/dsar_orchestrator/pipeline.py
+from concurrent.futures import ThreadPoolExecutor, FIRST_EXCEPTION, wait
+from dsar_pipeline import ingest, detect, redact, export, llm_router
+from dsar_pipeline.audit import PipelineAuditor
+from dsar_embed import core as embed_core
+from dsar_rerank import core as rerank_core
+from dsar_pii_classifier import core as pii_classify_core
+from dsar_pii_discovery import core as pii_discovery_core
+from dsar_redact_verify import core as redact_verify_core
+from dsar_orchestrator.hash_chain import verify_upstream, compute_upstream
+from dsar_orchestrator.audit import StageBanner
+from dsar_orchestrator.config import load_case_config, validate_phase_4_prereqs
+
+
+class PipelineHalt(Exception):
+    """Raised when redact-verify (Ph6) flags any failure. Case stays
+    in working/, never reaches output/."""
+
+
+def run(
+    case: CaseRef,
+    *,
+    from_stage: str | None = None,
+    through_stage: str | None = None,
+    only_stage: str | None = None,
+    dry_run: bool = False,
+    check: bool = False,
+) -> RunReport:
+    """Orchestrate a full DSAR case run.
+
+    Stages 1-8 per "The optimal flow" section.
+    Resume semantics: each stage checks artefact presence + upstream_hash
+    before running; skips when fresh.
+    Failure semantics: typed exceptions surface to the operator with
+    the case-no + stage + recovery instruction. PipelineHalt is the one
+    intentional "stop here, manual review" outcome (Ph6 verifier fail).
+    """
+    cfg = load_case_config(case)
+    if cfg.pii_classify_mode != "off":
+        validate_phase_4_prereqs(cfg)  # asserts subject_identifier present + well-formed
+
+    plan = build_stage_plan(case, cfg, from_stage, through_stage, only_stage)
+    if check or dry_run:
+        return plan.print_and_exit()
+
+    audit = PipelineAuditor(case)
+
+    # =========================================================
+    # Stage 1 — ingest (serial)
+    # =========================================================
+    if plan.includes("ingest"):
+        with StageBanner(audit, "ingest"):
+            ingest.run(case)
+            # Output: working/register.json + raw text per ref
+            # Hash: SHA-256 of source/ directory tree
+
+    # =========================================================
+    # Stage 2 — parallel: embed (Ph1) ∥ detect-2.1-2.4 ∥ pii-discovery (Ph5)
+    # =========================================================
+    if plan.includes_any("embed", "detect_2_1_to_2_4", "pii_discovery"):
+        with StageBanner(audit, "stage_2_parallel"):
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                futures = {}
+                if plan.includes("embed"):
+                    verify_upstream(case, "embeddings.jsonl", upstream="register.json")
+                    futures["embed"] = ex.submit(embed_core.embed_corpus, case)
+                if plan.includes("detect_2_1_to_2_4"):
+                    futures["detect_2_1_to_2_4"] = ex.submit(
+                        detect.run_2_1_to_2_4, case
+                    )
+                if plan.includes("pii_discovery") and cfg.discovery_enabled:
+                    futures["pii_discovery"] = ex.submit(
+                        pii_discovery_core.discover_entities, case
+                    )
+
+                done, _ = wait(futures.values(), return_when=FIRST_EXCEPTION)
+                # Propagate any exception immediately. If embed fails,
+                # detect + discovery futures are cancelled by the
+                # exiting context manager.
+                for f in done:
+                    f.result()  # re-raises if it had an exception
+
+    # =========================================================
+    # Stage 3 — parallel: people_register ∥ (scope_prefilter → rerank Ph2)
+    # =========================================================
+    if plan.includes_any("people_register", "scope_filter_chain"):
+        with StageBanner(audit, "stage_3_parallel"):
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                futures = {}
+                if plan.includes("people_register"):
+                    futures["people_register"] = ex.submit(
+                        detect.run_people_register, case
+                    )
+                if plan.includes("scope_filter_chain"):
+                    futures["scope_filter_chain"] = ex.submit(
+                        _scope_filter_chain, case, cfg
+                    )
+
+                done, _ = wait(futures.values(), return_when=FIRST_EXCEPTION)
+                for f in done:
+                    f.result()
+
+    # =========================================================
+    # Stage 4 — LLM scope-classify (Sonnet 4.6, semaphore-gated)
+    # =========================================================
+    if plan.includes("scope_classify"):
+        with StageBanner(audit, "scope_classify"):
+            detect.run_scope_classify(case)
+            # Internally:
+            # - Iterates docs in cosine-passing set (shadow) or
+            #   reranker-kept set (enforce, post-Ph2 promotion).
+            # - For each: llm_router.dispatch(role="scope_classify", ...)
+            #   which acquires the DSAR_LLM_CONCURRENCY semaphore.
+            # - Writes tags per doc + appends llm_calls.jsonl.
+
+    # =========================================================
+    # Stage 5 — LLM PII classifier (Ph4 — Haiku 4.5, semaphore-gated)
+    # =========================================================
+    if plan.includes("pii_classify") and cfg.pii_classify_mode != "off":
+        with StageBanner(audit, "pii_classify"):
+            try:
+                pii_classify_core.classify_case(
+                    case,
+                    mode=cfg.pii_classify_mode,  # shadow | enforce
+                    subject_identifier=cfg.subject_identifier,
+                    budget_usd=cfg.pii_budget_usd,  # default $10
+                )
+                # Internally per in-scope doc:
+                # - llm_router.dispatch(role="pii_classify", ...)
+                #   acquires the SAME global semaphore as scope_classify.
+                # - Emits pii_collection.jsonl row.
+                # - If in_scope_recheck == "disputed":
+                #     emits scope_recheck.jsonl row + sets a "halt" flag
+                #     for this ref that redact.py will respect.
+                # - Always appends to ~/.dsar-audit/training_corpus/
+                #   (cross-case; survives bundle deletion).
+            except PIIBudgetExceeded as e:
+                # Fail loud per CLI contract; operator decides to raise
+                # the budget cap or abandon the case.
+                audit.note("pii_budget_exceeded", str(e))
+                raise
+
+    # =========================================================
+    # Stage 6 — redact (entity-source preference per Ph4 mode)
+    # =========================================================
+    if plan.includes("redact"):
+        with StageBanner(audit, "redact"):
+            redact.run(
+                case,
+                prefer_llm_entities=(cfg.pii_classify_mode == "enforce"),
+                respect_dispute_halts=True,  # disputed docs from Ph4 skipped here
+            )
+            # Outputs: redacted/<ref>.* per doc.
+
+    # =========================================================
+    # Stage 7 — redact-verify (Ph6/B — halt-on-fail)
+    # =========================================================
+    if plan.includes("redact_verify") and cfg.redact_verify_enabled:
+        with StageBanner(audit, "redact_verify"):
+            verdict = redact_verify_core.verify_case(case)
+            audit.write_redact_verify_summary(verdict)
+            if not verdict.all_passed:
+                # Pipeline halts. Case stays in working/, NOT exported.
+                # Operator must inspect ~/.dsar-audit/<case>/redact_verify.jsonl
+                # and re-run redact (or fix the verifier flag) before export
+                # can proceed.
+                raise PipelineHalt(
+                    f"case={case.no} redact-verify failed: "
+                    f"{verdict.failed_doc_count} doc(s) flagged "
+                    f"({verdict.failed_verifier_summary}). "
+                    f"See ~/.dsar-audit/{case.no}/redact_verify.jsonl. "
+                    f"Re-run after fixing: "
+                    f"dsar-pipeline --case {case.no} --from redact"
+                )
+
+    # =========================================================
+    # Stage 8 — export
+    # =========================================================
+    if plan.includes("export"):
+        with StageBanner(audit, "export"):
+            export.run(case)
+            # Outputs: output/<ref>.pdf per doc + cover sheet.
+
+    return audit.finalise()
+
+
+def _scope_filter_chain(case, cfg):
+    """Stage 3's chained scope_prefilter → dsar_rerank branch.
+    Bundled into one function so it runs as a single ThreadPoolExecutor
+    future."""
+    detect.run_scope_prefilter(case)  # cosine ≥ 0.30 → cosine_prefilter.jsonl
+    if cfg.rerank_mode != "off":
+        rerank_core.rerank_case(
+            case,
+            mode=cfg.rerank_mode,       # shadow | enforce
+            threshold=cfg.rerank_threshold,  # default 0.01 per integration spec v4
+        )
+        # Emits scope_rerank.jsonl. In shadow: pass-through (LLM still
+        # sees everything cosine kept). In enforce: filters cosine set
+        # to top-k or score-cutoff.
+```
+
+### Invariants the pseudocode encodes
+
+- **Two-caller invariant.** Every stage calls `<module>.core.<fn>(case)`
+  directly. Never subprocess. The module's own CLI (`dsar-embed`,
+  `dsar-rerank`, ...) is a wrapper around the same `core.<fn>()`;
+  drift between orchestrator + CLI is impossible.
+- **Hash-chain invariant.** `verify_upstream` before each downstream
+  stage; raises if upstream changed (the operator sees a clear
+  re-run instruction, no silent staleness).
+- **Audit-emission invariant.** Every stage opens a `StageBanner`
+  context manager that writes `pipeline.jsonl` start/end rows with
+  duration + outcome. No stage is silent in the audit log.
+- **Halt-not-degrade invariant.** Failures raise typed exceptions
+  with case-no + stage + recovery instruction. The pipeline never
+  silently produces a wrong output. `PipelineHalt` is the only
+  intentional "stop here, manual review" exit.
+- **Mode-respects-config invariant.** Ph2 + Ph4 modes
+  (off/shadow/enforce) come from case config, env var, or
+  operator-override file (`~/.dsar-rerank-mode`,
+  `~/.dsar-pii-mode`) in that priority order. The orchestrator
+  reads the mode once at start and passes it explicitly to each
+  module's `core.<fn>()` — never re-reads mid-run.
+
+### What the pseudocode does NOT show
+
+- The actual hash-chain verify implementation (lives in
+  `dsar_orchestrator.hash_chain`).
+- The PipelineAuditor's atomic-write contract for
+  `pipeline.jsonl` (per Cross-cutting § Operational semantics).
+- The semaphore implementation inside `llm_router.dispatch()`
+  (toolkit-side; sees both Sonnet 4.6 and Haiku 4.5 traffic).
+- The case-config schema validation (toolkit-side; defines what
+  fields `cfg` carries).
+
+---
+
 ## Resume semantics — `upstream_hash` everywhere
 
 The trickier question. Surgical re-runs only work if downstream
@@ -280,16 +567,26 @@ Mismatch → fail loudly with a clear instruction:
 > Re-run `dsar-<X> --case <Y> --if-exists overwrite` or
 > `dsar-pipeline --case <Y> --from <stage>` to refresh.
 
-### Concrete hash chain
+### Concrete hash chain (all 7 phases)
 
 | Artefact | `upstream_hash` covers |
 |---|---|
 | `working/embeddings.jsonl` | sorted hash of `(ref, sha256(raw_text))` for every ref in `register.json` |
+| `working/pii_discovery.jsonl` (Ph5) | hash of `register.json` + raw text per ref + GLiNER model_revision |
 | `working/cosine_prefilter.jsonl` | hash of `embeddings.jsonl` + the case-context vector + the threshold |
-| `working/scope_rerank.jsonl` | hash of `cosine_prefilter.jsonl` + the case scope statement + the reranker model_revision |
-| `working/<ref>_tags.json` | hash of the cosine-passing set (or reranker-kept set, in enforce mode) + raw text per ref |
-| `redacted/<ref>.*` | hash of `<ref>_tags.json` + per-doc raw bytes |
-| `output/<ref>.pdf` | hash of `redacted/<ref>.*` |
+| `working/scope_rerank.jsonl` (Ph2) | hash of `cosine_prefilter.jsonl` + the case scope statement + the reranker model_revision + threshold + mode |
+| `working/<ref>_tags.json` | hash of the cosine-passing set (or reranker-kept set, in enforce mode) + pii_discovery output for ref + raw text per ref |
+| `working/pii_collection.jsonl` (Ph4) | hash of `<ref>_tags.json` set for in-scope refs + subject_identifier + Haiku 4.5 model_revision + mode |
+| `working/scope_recheck.jsonl` (Ph4) | hash of `pii_collection.jsonl` (one entry per disputed ref) |
+| `redacted/<ref>.*` | hash of `<ref>_tags.json` + (in enforce mode) `pii_collection.jsonl` entry for ref + per-doc raw bytes |
+| `~/.dsar-audit/<case>/redact_verify.jsonl` (Ph6) | hash of `redacted/*` (one entry per verified doc) |
+| `output/<ref>.pdf` | hash of `redacted/<ref>.*` + (redact_verify_pass=true required) |
+
+The Ph6 entry uses an absolute path because the verify-log lives
+under the audit tree, not in case `working/`. It still participates
+in the chain: `output/` cannot be written until `redact_verify.jsonl`
+shows pass=true for every redacted ref. This is the enforcement
+mechanism for the halt-on-fail invariant from "The optimal flow".
 
 ### Why upstream_hash, not mtime
 
@@ -336,28 +633,44 @@ commits to a (potentially long) run.
 ## Rate-limit handling at the LLM gate
 
 Anthropic Claude is the only external rate-limited resource the
-pipeline touches. The scope-classify step (detect-2.5) calls
-Claude once per cosine-passing (or reranker-kept) document. For a
-typical case that's hundreds to thousands of calls.
+pipeline touches. **Two stages** now call Claude — Stage 4
+scope-classify (Sonnet 4.6) and Stage 5 pii-classify (Haiku 4.5,
+Phase 4). For a typical case that's hundreds-thousands of
+scope-classify calls plus (in shadow + enforce) Haiku calls
+against the in-scope subset.
 
 For multiple cases running concurrently, naive parallelism
-multiplies the call rate and trips the per-minute or per-day token
-limits.
+multiplies the call rate and trips the per-minute or per-day
+token limits.
 
 **Locked decision:** a **single global semaphore** gates concurrent
-LLM scope-classify calls. Lives in `src/dsar_pipeline/llm_router.py`
-(the existing module). Default concurrency 5; env var
-`DSAR_LLM_CONCURRENCY` overrides. The semaphore is process-local
-(per-`dsar-pipeline` invocation); operators running multiple
-parallel `dsar-pipeline` shells on the same machine are
-responsible for their own arithmetic.
+Anthropic calls across both stages. Lives in
+`dsar_pipeline.llm_router` (toolkit-side, not orchestrator).
+Default concurrency 5; env var `DSAR_LLM_CONCURRENCY` overrides.
+The semaphore is process-local (per-`dsar-pipeline` invocation);
+operators running multiple parallel `dsar-pipeline` shells on the
+same machine are responsible for their own arithmetic.
+
+Both `llm_router.dispatch(role="scope_classify", ...)` (Sonnet 4.6)
+and `llm_router.dispatch(role="pii_classify", ...)` (Haiku 4.5)
+acquire the SAME semaphore. This is intentional: the limit is
+total concurrent Anthropic calls, regardless of model. A case
+running in PII enforce mode can saturate the semaphore with
+Haiku calls just as easily as with Sonnet calls; the semaphore
+keeps total budget under control.
+
+Per-role token-bucket separation (e.g., separate budgets for
+Sonnet and Haiku) is YAGNI today — single operator, single
+machine. If two stages start contending for the semaphore at
+scale, revisit with a weighted-token-bucket strategy.
 
 Why not a true distributed rate-limiter (e.g., Redis-backed)?
 Single operator, single workstation. YAGNI.
 
-The reranker (Phase 2 enforce mode) reduces the number of calls
-that hit the semaphore but doesn't replace it. Both safety nets
-are independent.
+The reranker (Phase 2 enforce mode) reduces the number of
+scope-classify calls that hit the semaphore but doesn't replace
+it. Phase 4 PII-classify adds calls; Phase 2's reduction and
+Phase 4's addition roughly cancel for typical cases.
 
 ---
 
@@ -389,17 +702,129 @@ The orchestrator catches the typed exceptions defined in
    endpoint. Exit non-zero. Operator can re-run `dsar-pipeline`
    once TEI is back; the resume cascade picks up where it left
    off.
-2. **LLM rate-limit hit** (Anthropic 429) at Stage 4 → retry
-   with backoff inside `llm_router.py` (existing behaviour);
-   surface only after retries are exhausted.
+2. **LLM rate-limit hit** (Anthropic 429) at Stage 4 or Stage 5
+   → retry with backoff inside `llm_router.py` (existing
+   behaviour); surface only after retries are exhausted.
 3. **Validation failure** (`upstream_hash` mismatch) → exit
    non-zero with the exact instruction to repair (e.g.,
    "re-run `dsar-embed --case X --if-exists overwrite`").
+4. **Phase 4 budget exceeded** (`DSAR_PII_BUDGET_USD` cap reached
+   mid-case) → emit a clear summary of work-done + work-remaining
+   + the per-doc spend rate; exit non-zero. Operator decides to
+   raise the cap (`DSAR_PII_BUDGET_USD=20 dsar-pipeline --case X
+   --from pii_classify`) or abandon the case.
+5. **Phase 6 verifier failure** (`PipelineHalt`) → case stays in
+   `working/`, NOT promoted to `output/`. Error message names the
+   failed-doc count + per-verifier summary + the recovery path
+   (re-run after fixing the redact step).
+6. **Phase 4 disputed-doc halt** → not a pipeline failure; case
+   continues. Disputed docs are skipped by `redact.py` and logged
+   to `scope_recheck.jsonl`. The case completes with operator
+   review queued; the operator inspects the dispute log, decides
+   which docs to redact (manually or by re-running pii-classify
+   with adjusted parameters), then runs `dsar-pipeline --case X
+   --from redact` to finish.
 
 The orchestrator never silently degrades. DSAR has legal
 deadlines; a silent slowdown could push a case past the 30-day
 statutory window without operator notice (per zen-tei-integration
 spec § Cross-cutting → Failover).
+
+---
+
+## Disagreement + halting (Phase 4 + Phase 6 specific)
+
+Two phases introduce new "this case is paused, operator review
+needed" outcomes. Both are intentional design choices, not
+failures.
+
+### Phase 4 disputed docs (per-doc halt, case continues)
+
+The PII classifier's `in_scope_recheck` returning `disputed`
+flags ONE document for operator review. The case keeps running:
+non-disputed docs continue through redact + verify + export. The
+disputed docs are written to `scope_recheck.jsonl` with full
+reasoning and skipped by `redact.py`.
+
+Per-case operator flow on completion:
+
+```bash
+dsar-pipeline --case 301770              # runs to completion;
+                                          # disputed docs unredacted
+# operator inspects:
+cat ~/.dsar-audit/301770/scope_recheck.jsonl
+# operator decides per doc:
+#   - "override: redact anyway" → tag-edit + re-run from redact
+#   - "drop from case: out of scope" → mark as excluded + re-run from redact
+#   - "expand scope: confirm in" → update case scope + re-run from pii_classify
+dsar-pipeline --case 301770 --from <decision-stage>
+```
+
+This is by design: in a regulated domain, the LLM should never
+silently auto-override the scope-classify verdict in either
+direction. Disputes get human eyes.
+
+### Phase 6 verifier failure (whole-pipeline halt)
+
+The redact-verify gate is binary: every redacted doc must pass
+all three verifiers (pikepdf + pytesseract + difflib). Any
+failure halts the entire pipeline. The case stays in `working/`
+indefinitely until the operator inspects + fixes.
+
+Per-case operator flow on `PipelineHalt`:
+
+```bash
+dsar-pipeline --case 301770
+# → PipelineHalt: case=301770 redact-verify failed: 3 doc(s) flagged ...
+cat ~/.dsar-audit/301770/redact_verify.jsonl
+# operator finds e.g. "ref 0042: pikepdf detected unredacted
+# 'James Carter' in text layer at position 1457"
+# operator inspects redact.py output for that ref, fixes the bug
+# (e.g., redact.py was using mtime instead of byte-offset), then:
+dsar-pipeline --case 301770 --from redact
+```
+
+This is the strictest gate in the whole pipeline. There is no
+"override and proceed" path; verifier failure means PII leakage
+risk, which is the failure mode the whole pipeline exists to
+prevent.
+
+### Both: audit trail invariant
+
+Both halt paths emit explicit audit entries to
+`pipeline.jsonl`. Resume from a halt is a NEW audit entry, not
+a continuation — the trail shows exactly when the halt
+occurred, what the operator did, when the resume happened, and
+what changed.
+
+---
+
+## Per-phase integration table
+
+How each of the 7 dsar-toolkit phases hooks into the orchestrator:
+
+| Phase | Module | Where in `pipeline.run()` | Mode handling | Halt path |
+|---|---|---|---|---|
+| 1 | `dsar_embed` | Stage 2 parallel branch | n/a (always-on) | TEI unreachable → typed exception |
+| 2 | `dsar_rerank` | Stage 3 parallel branch (chained after `scope_prefilter`) | `RERANK_MODE={off,shadow,enforce}`; orchestrator reads at start, passes to `core.rerank_case()` | TEI unreachable → typed exception. Promotion-gate violation → reverts to shadow on next run (auto-revert via `~/.dsar-rerank-mode`) |
+| 3 | `dsar_search` | NOT in DAG (OOB tool) | n/a | Stale `embeddings.jsonl` → refuses with hash-mismatch error |
+| 4 | `dsar_pii_classifier` | Stage 5 (new) | `PII_CLASSIFY_MODE={off,shadow,enforce}`; subject_identifier required; `DSAR_PII_BUDGET_USD` cap | Budget exceeded → typed exception. Disputed docs → per-doc halt, case continues |
+| 5 | `dsar_pii_discovery` | Stage 2 parallel branch (third) | `DISCOVERY_ENABLED={true,false}`; toggled at case level | GLiNER model missing → install-time error, not runtime |
+| 6 | `dsar_redact_verify` | Stage 7 (new; halt-on-fail gate before export) | `REDACT_VERIFY_ENABLED={true,false}`; false discouraged | ANY verifier failure → `PipelineHalt`; case stays in `working/` |
+| 7 | regression harness | NOT in DAG (CI infra) | n/a | n/a |
+
+The orchestrator reads ALL of these env vars / config fields
+once at start, validates them, and passes them explicitly into
+each module's `core.<fn>(case, mode=..., ...)`. The orchestrator
+itself does not branch on mode mid-stage; each module owns its
+mode-respect behaviour.
+
+This is the same "two-caller invariant, one implementation per
+module" rule from the Orchestration model section, applied to
+mode-handling specifically: the CLI of each module accepts the
+same mode flags; the orchestrator passes them through; both
+paths use the same `core.<fn>()` underneath; drift is
+impossible.
 
 ---
 
@@ -429,57 +854,109 @@ the audit-trail companion to `llm_calls.jsonl` and
 
 This is an *orchestration* design, not an implementation spec.
 The concrete file-level changes belong in the eventual writing-
-plans output. But for orientation:
+plans output. But for orientation — and noting that orchestrator
+code now lives in `harkers/dsar-orchestrator`, not
+`harkers/dsar-toolkit`:
+
+### In dsar-orchestrator (this repo)
 
 ```
-MOD   src/dsar_pipeline/pipeline.py
-    - extends the existing chain to import + call
-      dsar_embed / dsar_rerank in-process
-    - adds parallel branches for Stages 2 + 3 (concurrent.futures
-      or asyncio — picked at plan time)
-    - adds the `--from / --through / --only / --check` CLI flags
-    - adds the upstream_hash verification chain
-    - adds the stage-banner logging + pipeline.jsonl audit
-NEW   src/dsar_pipeline/hash_chain.py
-    - `compute_upstream_hash(stage, case) -> str`
-    - `verify_upstream_hash(artefact_path, expected) -> None`
+NEW   src/dsar_orchestrator/__init__.py
+NEW   src/dsar_orchestrator/pipeline.py
+    - the run(case, …) function from the pseudocode section above
+    - all 8 stages wired with ThreadPoolExecutor for Stages 2 + 3
+    - reads case config (mode, budget, subject_identifier);
+      passes values into each module's core.<fn>()
+    - integrates the upstream_hash verification chain
+    - opens StageBanner context managers for pipeline.jsonl audit
+NEW   src/dsar_orchestrator/hash_chain.py
+    - `compute_upstream_hash(artefact_kind, case) -> str`
+    - `verify_upstream(case, artefact_path, upstream: str) -> None`
     - shared by all modules' core.<fn>() functions
-MOD   src/dsar_pipeline/llm_router.py
-    - adds the DSAR_LLM_CONCURRENCY semaphore at scope-classify
+NEW   src/dsar_orchestrator/cli.py
+    - `dsar-pipeline` entry point (--case, --from, --through,
+      --only, --check, --dry-run, --mode)
+NEW   src/dsar_orchestrator/audit.py
+    - PipelineAuditor: emits pipeline.jsonl rows to
+      ~/.dsar-audit/<case>/
+    - StageBanner context manager
+NEW   src/dsar_orchestrator/config.py
+    - load_case_config(case) -> CaseConfig
+    - validate_phase_4_prereqs(cfg)  (subject_identifier required)
 NEW   docs/audit_schemas/pipeline.schema.json
-    - shape of pipeline.jsonl rows (stage banners)
-MOD   src/dsar_pipeline/audit.py
-    - registers the new schema
+    - shape of pipeline.jsonl rows
+NEW   pyproject.toml
+    - `dsar-pipeline` entry-point registration
+    - depends on `dsar-toolkit>={pinned-version}`
+NEW   .importlinter
+    - orchestrator may import dsar_pipeline.* + dsar_embed.* +
+      dsar_rerank.* + dsar_search.* + dsar_pii_classifier.* +
+      dsar_pii_discovery.* + dsar_redact_verify.* + dsar_clients.*
+    - toolkit may NOT import dsar_orchestrator.* (one-way rule)
+NEW   tests/test_pipeline_run.py + fixtures
+NEW   tests/test_hash_chain.py
+NEW   tests/test_cli.py
 ```
 
-No changes to the modules' own `core.py` from this spec — those
-were specified in the zen-tei-integration design. The hash_chain
-helper is the one new shared utility; every module's core
-function calls `hash_chain.compute_upstream_hash()` and
-`verify_upstream_hash()` at appropriate boundaries.
+### In dsar-toolkit (companion changes)
+
+```
+MOD   src/dsar_pipeline/llm_router.py
+    - adds the DSAR_LLM_CONCURRENCY semaphore (gates both
+      scope_classify and pii_classify roles)
+    - role `pii_classify` → claude-haiku-4-5-20251001
+    - already-existing role `scope_classify` → claude-sonnet-4-6
+MOD   src/dsar_pipeline/audit.py
+    - registers pipeline.jsonl schema (cross-repo schema)
+MOD   src/dsar_pipeline/pipeline.py
+    - DEPRECATED. Operator gets a one-line stub that exits with
+      "use dsar-pipeline from dsar-orchestrator instead". May be
+      deleted entirely once dsar-orchestrator has shipped and the
+      operator has confirmed the orchestrator is the only entry
+      point used.
+MOD   <case-config schema>
+    - subject_identifier becomes required for cases that run
+      Phase 4 (PII_CLASSIFY_MODE != off)
+MOD   <each module's core.py>
+    - hash_chain integration: every core.<fn>() that writes an
+      artefact calls compute_upstream_hash(); every one that
+      reads an artefact calls verify_upstream() (or has the
+      caller orchestrator do so, depending on plan-time choice)
+```
+
+The toolkit-side changes are minimal: the orchestrator was always
+an extracted concern; the toolkit's existing pipeline.py was the
+"legacy" chain that the orchestrator supersedes. The toolkit's
+modules are unchanged.
 
 ---
 
 ## Cross-cutting consistency with the integration spec
 
 This spec composes with
-[`2026-05-22-zen-tei-integration-design-v3.md`](2026-05-22-zen-tei-integration-design-v3.md):
+[`2026-05-22-zen-tei-integration-design-v4.md`](https://github.com/harkers/dsar-toolkit/blob/main/docs/superpowers/specs/2026-05-22-zen-tei-integration-design-v4.md)
+(in the dsar-toolkit repo):
 
 | Concern | Where it lives |
 |---|---|
-| Module shape (`__init__`, `cli`, `core`, …) | integration spec v3 |
-| Dependency rules (CI-enforced) | integration spec v3 + Appendix B |
-| HTTP robustness (timeouts/retries/deadlines) | integration spec v3 § Operational semantics |
-| Idempotency primitive (`--if-exists`, atomic writes) | integration spec v3 § CLI contract |
-| Schema/producer versioning | integration spec v3 § Schema and artifact versioning |
+| Module shape (`__init__`, `cli`, `core`, …) | integration spec v4 (dsar-toolkit) |
+| Dependency rules (CI-enforced) | integration spec v4 + Appendix B; this spec's `.importlinter` covers the cross-repo direction |
+| HTTP robustness (timeouts/retries/deadlines) | integration spec v4 § Operational semantics |
+| Idempotency primitive (`--if-exists`, atomic writes) | integration spec v4 § CLI contract |
+| Schema/producer versioning | integration spec v4 § Schema and artifact versioning |
+| Phase 2 shadow/enforce promotion gates | integration spec v4 § Phase 2 + Appendix A |
+| Phase 4 shadow/enforce promotion gates | integration spec v4 § Phase 4 |
 | **Stage ordering + parallelism** | **this spec** |
 | **Resume / upstream_hash chain** | **this spec** |
 | **Orchestrator vs module-CLI contract** | **this spec** |
-| **LLM-call concurrency semaphore** | **this spec** |
+| **LLM-call concurrency semaphore** | **this spec** (toolkit-side llm_router.py implements; orchestrator drives) |
+| **Disagreement + halting** (Ph4 dispute, Ph6 verify-fail) | **this spec** |
+| **Per-phase integration table** | **this spec** |
 
 Together they answer "how is Phase N built?" (integration spec) +
-"how do all phases run together?" (this spec). Future phases (4+)
-should slot into both specs' patterns without further design.
+"how do all phases run together?" (this spec). All 7 phases of
+the integration spec v4 are covered by the DAG, pseudocode, and
+per-phase integration table here.
 
 ---
 
@@ -503,6 +980,28 @@ should slot into both specs' patterns without further design.
 - **`--check` against a case the operator doesn't have access to?**
   Read-only operation; fails cleanly with "cannot read
   `~/dsars/cases/<no>/`" if the sparse bundle is dismounted.
+- **Cross-repo dependency: pip-install or git-submodule for
+  dsar-toolkit?** `pip install -e ~/projects/dsar-toolkit` (editable
+  install). Single operator, single workstation; pip's editable
+  mode is the simplest dev story. Git submodule rejected — adds
+  fetch/update overhead and complicates the cross-repo dependency
+  graph for no benefit at this scale.
+- **dsar-toolkit version pin?** Loose at first
+  (`dsar-toolkit>=0.1.0`). Tighten to a specific minor version
+  (`dsar-toolkit>=0.4,<0.5`) once both repos stabilise. The
+  pin lives in `dsar-orchestrator/pyproject.toml`.
+- **Where does the cross-repo `pipeline.jsonl` schema live?**
+  In dsar-toolkit, alongside the other audit schemas, because the
+  toolkit's `audit.py` shared validator is what enforces it. The
+  orchestrator emits rows; the toolkit defines + validates the
+  shape.
+- **Phase 7 (regression harness) — which repo?** Lives in
+  dsar-toolkit (because it tests the toolkit's modules), but its
+  end-to-end test cases invoke `dsar_orchestrator.pipeline.run()`.
+  This is the one place the dependency is bidirectional at test
+  time only — dsar-toolkit's test suite depends on
+  dsar-orchestrator as a dev-dep. Production code dependency
+  stays one-way.
 
 ---
 
