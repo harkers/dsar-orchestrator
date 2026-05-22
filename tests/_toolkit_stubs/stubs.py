@@ -365,7 +365,6 @@ def make_redact_verify_stub() -> types.ModuleType:
 
     def verify_case(case_path: Path) -> Verdict:
         # Stub: write a passing verdict to the audit log.
-        from dsar_orchestrator.hash_chain import sha256_text
 
         redacted_dir = case_path / "redacted"
         pairs: list[tuple[str, str]] = []
