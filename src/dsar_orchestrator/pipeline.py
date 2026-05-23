@@ -370,17 +370,12 @@ def _run_redact(cfg: CaseConfig) -> None:
 
 
 def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
-    """Returns a verdict; raises PipelineHalt on any verifier failure."""
-    verify_core = _lazy_import("dsar_redact_verify.core")
-    verdict = verify_core.verify_case(cfg.case_path)
-    if not verdict.all_passed:
-        raise PipelineHalt(
-            f"case={cfg.case_no} redact-verify failed: "
-            f"{verdict.failed_doc_count} doc(s) flagged "
-            f"({verdict.failed_verifier_summary}). "
-            f"See ~/.dsar-audit/{cfg.case_no}/redact_verify.jsonl. "
-            f"Re-run after fixing: dsar-conductor --case {cfg.case_no} --from redact"
-        )
+    """Returns None on success; raises PipelineHalt on any verifier failure."""
+    # ADAPTER for redact_verify (retires when toolkit ships
+    # `dsar_redact_verify.core.verify_case_for_conductor(case_path)`).
+    from dsar_orchestrator.adapters import redact_verify as redact_verify_adapter
+
+    redact_verify_adapter.run_for_case(cfg)
     _check_module_work(cfg, "redact_verify")
     return None
 
