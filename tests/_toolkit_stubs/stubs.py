@@ -103,31 +103,17 @@ def make_tei_embed_client_stub() -> types.ModuleType:
     return mod
 
 
-# ─── detect (2.1-2.4 + people_register + scope_prefilter + scope_classify) ──
+# ─── detect (people_register + scope_prefilter + scope_classify) ──
+#
+# NB: run_2_1_to_2_4 used to live here too; the detect adapter now
+# shells out to `python -m dsar_pipeline.detect` instead, and the
+# integration fixtures monkeypatch its runner with a fake that writes
+# the per-ref <ref>_tags.json files the toolkit's detect would
+# normally produce.
 
 
 def make_detect_stub() -> types.ModuleType:
     mod = types.ModuleType("dsar_pipeline.detect")
-
-    def run_2_1_to_2_4(case_path: Path) -> None:
-        # Read register, write per-ref tag stubs + a manifest.
-        # In the toolkit, pii_identification_stage writes <ref>_tags.json
-        # files; the stub bundles that here so downstream stub stages
-        # (pii_classify) have something to read.
-        register = json.loads((case_path / "working" / "register.json").read_text())
-        upstream = compute_register_hash(case_path / "working" / "register.json")
-        rows = []
-        for entry in register["refs"]:
-            rows.append(
-                {
-                    "ref": entry["ref"],
-                    "entities": [],
-                    "upstream_hash": upstream,
-                }
-            )
-            tags_path = case_path / "working" / f"{entry['ref']}_tags.json"
-            _write_json(tags_path, {"ref": entry["ref"], "in_scope": True})
-        _write_jsonl(case_path / "working" / "detect_entities.jsonl", rows)
 
     def run_people_register(case_path: Path) -> None:
         emb_path = case_path / "working" / "embeddings.jsonl"
@@ -167,7 +153,6 @@ def make_detect_stub() -> types.ModuleType:
             [{"completed": True, "upstream_hash": upstream}],
         )
 
-    mod.run_2_1_to_2_4 = run_2_1_to_2_4
     mod.run_people_register = run_people_register
     mod.run_scope_prefilter = run_scope_prefilter
     mod.run_scope_classify = run_scope_classify

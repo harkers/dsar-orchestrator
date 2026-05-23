@@ -288,8 +288,11 @@ def _run_embed(cfg: CaseConfig) -> None:
 
 
 def _run_detect_2_1_to_2_4(cfg: CaseConfig) -> None:
-    detect = _lazy_import("dsar_pipeline.detect")
-    detect.run_2_1_to_2_4(cfg.case_path)
+    # ADAPTER for detect (retires when toolkit ships
+    # `dsar_pipeline.detect.run_for_case(case_path, subject_name)`).
+    from dsar_orchestrator.adapters import detect_2_1_to_2_4 as detect_adapter
+
+    detect_adapter.run_for_case(cfg)
     _check_module_work(cfg, "detect_2_1_to_2_4")
 
 

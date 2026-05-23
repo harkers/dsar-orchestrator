@@ -81,6 +81,26 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
 
+    # Mock the detect adapter's subprocess runner so tests don't
+    # shell out to `python -m dsar_pipeline.detect`. The fake reads
+    # register.json + writes one <ref>_tags.json per ref (mirroring
+    # what the toolkit's detect would produce).
+    from dsar_orchestrator.adapters import detect_2_1_to_2_4 as _detect
+
+    def _fake_detect_runner(argv, env, cwd):
+        case_path = Path(cwd)
+        working = case_path / "working"
+        register_path = working / "register.json"
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            for entry in register.get("refs", []):
+                (working / f"{entry['ref']}_tags.json").write_text(
+                    json.dumps({"ref": entry["ref"], "in_scope": True, "entities": []})
+                )
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_detect, "_default_runner", lambda: _fake_detect_runner)
+
     # Mock the scope-classify adapter's subprocess runner so tests
     # don't try to invoke `dsar-scope-check`. The runner writes a
     # minimal scope_verdicts.jsonl that the adapter then reads to

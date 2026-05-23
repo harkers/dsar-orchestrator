@@ -79,6 +79,25 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
 
+    # Mock the detect adapter's subprocess runner — see
+    # tests/integration/test_full_pipeline_with_stubs.py for the
+    # equivalent in the other integration suite.
+    from dsar_orchestrator.adapters import detect_2_1_to_2_4 as _detect
+
+    def _fake_detect_runner(argv, env, cwd):
+        case_path = Path(cwd)
+        working = case_path / "working"
+        register_path = working / "register.json"
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            for entry in register.get("refs", []):
+                (working / f"{entry['ref']}_tags.json").write_text(
+                    json.dumps({"ref": entry["ref"], "in_scope": True, "entities": []})
+                )
+        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_detect, "_default_runner", lambda: _fake_detect_runner)
+
     # Mock the scope-classify adapter's subprocess runner — see
     # tests/integration/test_full_pipeline_with_stubs.py for the
     # equivalent in the other integration suite.
