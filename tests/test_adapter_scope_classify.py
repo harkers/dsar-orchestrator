@@ -185,7 +185,10 @@ def test_raises_when_verdicts_not_produced(tmp_path: Path) -> None:
         adapter.run_for_case(cfg, runner=silent)
 
 
-def test_summary_tolerates_malformed_verdict_rows(tmp_path: Path) -> None:
+def test_raises_on_malformed_verdict_row(tmp_path: Path) -> None:
+    """A corrupt row in scope_verdicts.jsonl indicates a real toolkit
+    bug; the adapter must fail loud rather than bucket the parse
+    failure into a green anchor."""
     case_path = _seed_case(tmp_path)
 
     def garbage_runner(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -194,13 +197,8 @@ def test_summary_tolerates_malformed_verdict_rows(tmp_path: Path) -> None:
         )
         return subprocess.CompletedProcess(args=argv, returncode=0)
 
-    adapter.run_for_case(_make_cfg(case_path), runner=garbage_runner)
-    row = json.loads(
-        (case_path / "working" / "scope_classify_complete.jsonl").read_text().splitlines()[0]
-    )
-    # Parse errors counted but didn't raise
-    assert row["summary"].get("present") == 1
-    assert row["summary"].get("parse_error") == 1
+    with pytest.raises(DSARPipelineError, match="malformed verdict row"):
+        adapter.run_for_case(_make_cfg(case_path), runner=garbage_runner)
 
 
 # ─── atomic write ──────────────────────────────────────────────────

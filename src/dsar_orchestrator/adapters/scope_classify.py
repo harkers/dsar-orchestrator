@@ -116,17 +116,19 @@ def _upstream_artefact_for(cfg: CaseConfig) -> Path:
 
 
 def _summarise_verdicts(path: Path) -> dict[str, int]:
-    """Count verdicts by type for the anchor row."""
+    """Count verdicts by type for the anchor row. Raises on any
+    malformed row — the toolkit emitting corrupt JSON in
+    scope_verdicts.jsonl is a real bug we surface rather than
+    swallow."""
     counts: dict[str, int] = {}
-    for line in path.read_text().splitlines():
+    for line_no, line in enumerate(path.read_text().splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
-            counts["parse_error"] = counts.get("parse_error", 0) + 1
-            continue
+        except json.JSONDecodeError as exc:
+            raise DSARPipelineError(f"malformed verdict row {line_no} in {path}: {exc}") from exc
         verdict = row.get("scope_verdict") or row.get("verdict") or "unknown"
         counts[verdict] = counts.get(verdict, 0) + 1
     return counts

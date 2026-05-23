@@ -32,6 +32,7 @@ from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file
 
 PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.1.0"
+SCHEMA_VERSION = "1.0"
 
 # runner(argv, env, cwd) -> CompletedProcess
 RunnerFn = Callable[[list[str], dict[str, str], Path], subprocess.CompletedProcess]
@@ -105,6 +106,7 @@ def _ensure_upstream_hash(case_path: Path, register_path: Path) -> None:
                 rel = str(p.relative_to(src))
                 pairs.append((rel, sha256_file(p)))
     register["upstream_hash"] = hash_pairs(pairs)
+    register["schema_version"] = SCHEMA_VERSION
     register["producer_version"] = PRODUCER_VERSION
 
     tmp_path = register_path.with_suffix(".json.tmp")

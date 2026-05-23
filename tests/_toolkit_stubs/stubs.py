@@ -1,8 +1,9 @@
 """Stub module factories — build sys.modules entries that mimic the
 toolkit's shape without needing dsar-pipeline installed.
 
-Each factory returns a (module_name, ModuleStub) tuple. The
-``install_toolkit_stubs`` fixture in conftest.py registers them all.
+Each factory returns a fake module; ``all_stubs()`` bundles them
+into a {module_name: module} dict. Integration fixtures load the
+dict and install it in sys.modules per-test.
 """
 
 from __future__ import annotations

@@ -43,12 +43,15 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
     # Redirect ~/.dsar-audit/ into tmp_path so we don't pollute the real one.
     monkeypatch.setenv("HOME", str(tmp_path))
 
+    # Imports shared by every runner-fake below. Hoisted so closure
+    # name resolution doesn't depend on later-line imports landing
+    # before the fixture yields.
+    import subprocess as _subprocess
+
     # Mock the ingest adapter's subprocess runner so tests don't
     # shell out to `python -m dsar_pipeline.ingest`. The fake walks
     # source/ and writes a synthetic register.json (mirroring what
     # the toolkit's ingest would produce).
-    import subprocess as _subprocess_for_ingest
-
     from dsar_orchestrator.adapters import ingest as _ingest
     from dsar_orchestrator.hash_chain import hash_pairs as _hp
     from dsar_orchestrator.hash_chain import sha256_file as _sf
@@ -77,7 +80,7 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
             "upstream_hash": _hp(pairs),
         }
         (working / "register.json").write_text(json.dumps(register))
-        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
 
@@ -105,7 +108,6 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
     # don't try to invoke `dsar-scope-check`. The runner writes a
     # minimal scope_verdicts.jsonl that the adapter then reads to
     # build its cascade anchor.
-    import subprocess as _subprocess
 
     from dsar_orchestrator.adapters import scope_classify as _scope_classify
 

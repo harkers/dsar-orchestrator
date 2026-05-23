@@ -114,8 +114,12 @@ def _aggregate_to_detect_entities(
             tags: Any
             try:
                 tags = json.loads(tag_path.read_text())
-            except json.JSONDecodeError:
-                tags = {"_parse_error": True}
+            except json.JSONDecodeError as exc:
+                # The toolkit producing a corrupt tag file is a real
+                # bug — fail loud so the operator sees it, rather
+                # than emitting a sentinel row that downstream agents
+                # accept as valid.
+                raise DSARPipelineError(f"malformed tag file at {tag_path}: {exc}") from exc
             # The module agent for detect_2_1_to_2_4 expects an
             # ``entities`` field per row. Project it out of the
             # toolkit's tag payload (default to empty list when the

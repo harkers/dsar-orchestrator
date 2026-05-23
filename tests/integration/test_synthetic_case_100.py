@@ -42,11 +42,14 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
     case_dir_root = tmp_path / "dsars" / "cases"
     case_dir_root.mkdir(parents=True)
 
+    # Imports shared by every runner-fake below. Hoisted so closure
+    # name resolution doesn't depend on later-line imports landing
+    # before the fixture yields.
+    import subprocess as _subprocess
+
     # Mock the ingest adapter's subprocess runner — see
     # tests/integration/test_full_pipeline_with_stubs.py for the
     # equivalent in the other integration suite.
-    import subprocess as _subprocess_for_ingest
-
     from dsar_orchestrator.adapters import ingest as _ingest
     from dsar_orchestrator.hash_chain import hash_pairs as _hp
     from dsar_orchestrator.hash_chain import sha256_file as _sf
@@ -75,7 +78,7 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
             "upstream_hash": _hp(pairs),
         }
         (working / "register.json").write_text(json.dumps(register))
-        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
 
@@ -94,15 +97,13 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
                 (working / f"{entry['ref']}_tags.json").write_text(
                     json.dumps({"ref": entry["ref"], "in_scope": True, "entities": []})
                 )
-        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_detect, "_default_runner", lambda: _fake_detect_runner)
 
     # Mock the scope-classify adapter's subprocess runner — see
     # tests/integration/test_full_pipeline_with_stubs.py for the
     # equivalent in the other integration suite.
-    import subprocess as _subprocess
-
     from dsar_orchestrator.adapters import scope_classify as _scope_classify
 
     def _fake_scope_check_runner(argv, env):

@@ -100,19 +100,21 @@ def _compute_upstream_hash(cfg: CaseConfig) -> str:
 
 
 def _summarise_redaction_input(path: Path) -> dict[str, int]:
-    """Cheap counts the dashboard / cascade can show."""
+    """Cheap counts the dashboard / cascade can show. Raises on any
+    malformed row — the toolkit emitting corrupt JSON in
+    redaction_input.jsonl is a real bug we surface rather than
+    swallow."""
     total = 0
     by_reason: dict[str, int] = {}
-    for line in path.read_text().splitlines():
+    for line_no, line in enumerate(path.read_text().splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
         total += 1
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
-            by_reason["parse_error"] = by_reason.get("parse_error", 0) + 1
-            continue
+        except json.JSONDecodeError as exc:
+            raise DSARPipelineError(f"malformed row {line_no} in {path}: {exc}") from exc
         reason = row.get("reason_code") or row.get("reason") or "unknown"
         by_reason[reason] = by_reason.get(reason, 0) + 1
     return {"total_redactions": total, "by_reason": by_reason}

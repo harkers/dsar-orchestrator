@@ -130,18 +130,18 @@ def test_upstream_hash_matches_register(tmp_path: Path) -> None:
     assert row["upstream_hash"] == expected
 
 
-def test_tolerates_malformed_tag_file(tmp_path: Path) -> None:
-    """A garbage <ref>_tags.json must not crash the aggregation."""
+def test_raises_on_malformed_tag_file(tmp_path: Path) -> None:
+    """A garbage <ref>_tags.json indicates a real toolkit bug; the
+    adapter must fail loud rather than silently emit a sentinel row
+    that downstream agents would accept as valid."""
     case_path = _seed_case(tmp_path, refs=["d1"])
 
     def runner(argv, env, cwd):
         (case_path / "working" / "d1_tags.json").write_text("{not valid json}")
         return subprocess.CompletedProcess(args=argv, returncode=0)
 
-    adapter.run_for_case(_make_cfg(case_path), runner=runner)
-    row = json.loads((case_path / "working" / "detect_entities.jsonl").read_text().splitlines()[0])
-    assert row["ref"] == "d1"
-    assert row["tags"]["_parse_error"] is True
+    with pytest.raises(DSARPipelineError, match="malformed tag file"):
+        adapter.run_for_case(_make_cfg(case_path), runner=runner)
 
 
 def test_subject_omitted_when_missing(tmp_path: Path) -> None:
