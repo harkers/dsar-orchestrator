@@ -103,74 +103,29 @@ def make_tei_embed_client_stub() -> types.ModuleType:
     return mod
 
 
-# ─── detect (people_register + scope_prefilter + scope_classify) ──
-#
-# NB: run_2_1_to_2_4 used to live here too; the detect adapter now
-# shells out to `python -m dsar_pipeline.detect` instead, and the
-# integration fixtures monkeypatch its runner with a fake that writes
-# the per-ref <ref>_tags.json files the toolkit's detect would
-# normally produce.
-
-
-def make_detect_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_pipeline.detect")
-
-    def run_people_register(case_path: Path) -> None:
-        emb_path = case_path / "working" / "embeddings.jsonl"
-        upstream = sha256_file(emb_path)
-        _write_json(
-            case_path / "working" / "person_index.json",
-            {"clusters": [], "upstream_hash": upstream},
-        )
-
-    def run_scope_prefilter(case_path: Path) -> None:
-        emb_path = case_path / "working" / "embeddings.jsonl"
-        upstream = sha256_file(emb_path)
-        register = json.loads((case_path / "working" / "register.json").read_text())
-        rows = []
-        for entry in register["refs"]:
-            rows.append(
-                {
-                    "ref": entry["ref"],
-                    "cosine_score": 0.5,
-                    "passes": True,
-                    "upstream_hash": upstream,
-                }
-            )
-        _write_jsonl(case_path / "working" / "cosine_prefilter.jsonl", rows)
-
-    def run_scope_classify(case_path: Path) -> None:
-        # Anchor file marking completion.
-        cosine_path = case_path / "working" / "cosine_prefilter.jsonl"
-        upstream = sha256_file(cosine_path)
-        register = json.loads((case_path / "working" / "register.json").read_text())
-        # Write per-ref tags.
-        for entry in register["refs"]:
-            tags_path = case_path / "working" / f"{entry['ref']}_tags.json"
-            _write_json(tags_path, {"ref": entry["ref"], "in_scope": True})
-        _write_jsonl(
-            case_path / "working" / "scope_classify_complete.jsonl",
-            [{"completed": True, "upstream_hash": upstream}],
-        )
-
-    mod.run_people_register = run_people_register
-    mod.run_scope_prefilter = run_scope_prefilter
-    mod.run_scope_classify = run_scope_classify
-    return mod
+# NB: There is no make_detect_stub anymore. The detect /
+# scope_prefilter / scope_classify adapters all bypass
+# dsar_pipeline.detect (subprocess CLI or direct TEI client), and
+# people_register has its own toolkit module.
 
 
 def make_people_register_stub() -> types.ModuleType:
-    """Some callers do `from dsar_pipeline import people_register`."""
+    """Stub for the conductor's people_register adapter, which calls
+    ``dsar_pipeline.people_register.build_people_register(working_dir)``."""
     mod = types.ModuleType("dsar_pipeline.people_register")
 
-    def run(case_path: Path) -> None:
-        # Delegate to detect_stub's version; just here to satisfy
-        # alternative import paths.
-        from tests._toolkit_stubs.stubs import make_detect_stub
+    def build_people_register(working_dir: Path) -> dict:
+        # Minimal toolkit-shaped result; the adapter wraps this into
+        # working/person_index.json with the cascade fields.
+        return {
+            "clusters": [],
+            "alias_to_id": {},
+            "threshold": 0.75,
+            "model": "stub-model",
+            "generated_at": "2026-05-23T00:00:00Z",
+        }
 
-        make_detect_stub().run_people_register(case_path)
-
-    mod.run = run
+    mod.build_people_register = build_people_register
     return mod
 
 
@@ -338,7 +293,6 @@ def make_redact_verify_stub() -> types.ModuleType:
 
 def all_stubs() -> dict[str, types.ModuleType]:
     return {
-        "dsar_pipeline.detect": make_detect_stub(),
         "dsar_pipeline.people_register": make_people_register_stub(),
         # The conductor's embed step calls dsar_clients.tei_embed_client
         # directly (adapter pattern per toolkit issue #1), so we stub

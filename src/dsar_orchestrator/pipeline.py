@@ -305,8 +305,11 @@ def _run_pii_discovery(cfg: CaseConfig) -> None:
 
 
 def _run_people_register(cfg: CaseConfig) -> None:
-    pr = _lazy_import("dsar_pipeline.people_register")
-    pr.run(cfg.case_path)
+    # ADAPTER for people_register (retires when toolkit ships
+    # `dsar_pipeline.people_register.run_for_case(case_path)`).
+    from dsar_orchestrator.adapters import people_register as people_register_adapter
+
+    people_register_adapter.run_for_case(cfg)
     _check_module_work(cfg, "people_register")
 
 
