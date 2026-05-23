@@ -408,6 +408,15 @@ def check_pii_classify(cfg: CaseConfig) -> ModuleCheckResult:
 
 
 def check_redact(cfg: CaseConfig) -> ModuleCheckResult:
+    """Validate redact stage outputs.
+
+    The toolkit's redact_stage builds ``working/redaction_input.jsonl``
+    (the canonical spec of what to redact). Actual file output
+    (redacted/ tree) happens in the downstream bake step, which the
+    conductor's export adapter drives. So check_redact only validates
+    the input-spec + cascade anchor; check_export validates the
+    redacted+exported files.
+    """
     complete_path = cfg.case_path / "working" / "redact_complete.json"
     if not complete_path.exists():
         return _critical(
@@ -426,29 +435,20 @@ def check_redact(cfg: CaseConfig) -> ModuleCheckResult:
             ["redact_complete.json missing upstream_hash field"],
             _rerun_hint("redact", cfg.case_no),
         )
-    # redacted/ must contain at least one file per register ref
-    register = _load_register(cfg)
-    redacted_dir = cfg.case_path / "redacted"
-    if not redacted_dir.exists():
+    redaction_input = cfg.case_path / "working" / "redaction_input.jsonl"
+    if not redaction_input.exists():
         return _critical(
-            [f"redacted/ directory missing at {redacted_dir}"],
+            [f"redaction_input.jsonl missing at {redaction_input}"],
             _rerun_hint("redact", cfg.case_no),
         )
-    redacted_files = list(redacted_dir.iterdir())
-    if not redacted_files:
-        return _critical(
-            ["redacted/ directory is empty"],
-            _rerun_hint("redact", cfg.case_no),
-        )
-    if register:
-        expected = len(register.get("refs", []))
-        if len(redacted_files) < expected:
-            return _warning(
-                [f"redacted/ has {len(redacted_files)} files; register has {expected} refs"],
-                "Some refs may have been skipped (e.g., dispute halts). "
-                "Cross-check with scope_recheck.jsonl.",
-            )
-    return _ok([f"redact: {len(redacted_files)} files in redacted/"])
+    # File can be legitimately empty (no PII found anywhere) but the
+    # spec contract says it must exist.
+    return _ok(
+        [
+            f"redact: redaction_input.jsonl present "
+            f"(total={obj.get('summary', {}).get('total_redactions', '?')})"
+        ]
+    )
 
 
 # ─── redact_verify ──────────────────────────────────────────────────

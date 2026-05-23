@@ -67,6 +67,33 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(_scope_classify, "_default_runner", lambda: _fake_scope_check_runner)
 
+    # Mock the redact adapter's subprocess runner. Same trick as in
+    # tests/integration/test_full_pipeline_with_stubs.py.
+    from dsar_orchestrator.adapters import redact as _redact
+
+    def _fake_redact_runner(argv, env):
+        case_no = argv[argv.index("--case") + 1]
+        case_root = Path(env.get("DSAR_CASE_ROOT", ""))
+        case_path = case_root / case_no
+        working = case_path / "working"
+        working.mkdir(parents=True, exist_ok=True)
+        register_path = working / "register.json"
+        refs = []
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            refs = [r["ref"] for r in register.get("refs", [])]
+        (working / "redaction_input.jsonl").write_text(
+            "\n".join(json.dumps({"ref": r, "spans": [], "reason_code": "pii"}) for r in refs)
+            + ("\n" if refs else "")
+        )
+        redacted_dir = case_path / "redacted"
+        redacted_dir.mkdir(parents=True, exist_ok=True)
+        for r in refs:
+            (redacted_dir / f"{r}.txt").write_text("[REDACTED]\n")
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
+
     result = synthesize_case("800500", case_dir_root)
     return result
 

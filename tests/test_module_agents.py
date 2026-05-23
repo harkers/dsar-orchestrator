@@ -496,18 +496,24 @@ def test_redact_critical_when_complete_missing(tmp_path: Path) -> None:
     assert result.severity == "critical"
 
 
-def test_redact_critical_when_redacted_dir_empty(tmp_path: Path) -> None:
+def test_redact_critical_when_redaction_input_missing(tmp_path: Path) -> None:
+    """check_redact requires working/redaction_input.jsonl (the spec
+    of what to redact, produced by the toolkit's redact_stage)."""
     case_path = _make_case(tmp_path)
     (case_path / "working" / "redact_complete.json").write_text(json.dumps({"upstream_hash": "h"}))
     result = check_redact(_make_cfg(case_path))
     assert result.ok is False
-    assert "empty" in result.findings[0]
+    assert "redaction_input.jsonl" in result.findings[0]
 
 
 def test_redact_happy(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
-    (case_path / "working" / "redact_complete.json").write_text(json.dumps({"upstream_hash": "h"}))
-    (case_path / "redacted" / "doc-0001.txt").write_text("[REDACTED]")
+    (case_path / "working" / "redact_complete.json").write_text(
+        json.dumps({"upstream_hash": "h", "summary": {"total_redactions": 1}})
+    )
+    (case_path / "working" / "redaction_input.jsonl").write_text(
+        '{"ref":"doc-0001","spans":[],"reason_code":"pii"}\n'
+    )
     result = check_redact(_make_cfg(case_path))
     assert result.ok is True
 

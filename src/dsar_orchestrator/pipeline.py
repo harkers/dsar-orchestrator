@@ -358,12 +358,14 @@ def _run_pii_classify(cfg: CaseConfig) -> None:
 
 
 def _run_redact(cfg: CaseConfig) -> None:
-    redact = _lazy_import("dsar_pipeline.redact")
-    redact.run(
-        cfg.case_path,
-        prefer_llm_entities=(cfg.pii_classify_mode == "enforce"),
-        respect_dispute_halts=True,
-    )
+    # ADAPTER for redact (retires when toolkit ships
+    # `dsar_pipeline.redact_stage.run_for_case(case_path)`).
+    # Toolkit's redact stage builds working/redaction_input.jsonl —
+    # the canonical spec of what to redact. Actual file output
+    # (redacted PDFs) happens in the export adapter's bake step.
+    from dsar_orchestrator.adapters import redact as redact_adapter
+
+    redact_adapter.run_for_case(cfg)
     _check_module_work(cfg, "redact")
 
 

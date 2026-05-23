@@ -72,6 +72,38 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(_scope_classify, "_default_runner", lambda: _fake_scope_check_runner)
 
+    # Mock the redact adapter's subprocess runner so tests don't try to
+    # invoke `dsar-redact`. The runner writes `redaction_input.jsonl`
+    # (the real toolkit output) AND `redacted/<ref>.txt` files (a stand-
+    # in for what the not-yet-built bake step inside the export adapter
+    # would produce).
+    from dsar_orchestrator.adapters import redact as _redact
+
+    def _fake_redact_runner(argv, env):
+        case_no = argv[argv.index("--case") + 1]
+        case_root = Path(env.get("DSAR_CASE_ROOT", ""))
+        case_path = case_root / case_no
+        working = case_path / "working"
+        working.mkdir(parents=True, exist_ok=True)
+        register_path = working / "register.json"
+        refs = []
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            refs = [r["ref"] for r in register.get("refs", [])]
+        # Spec rows the conductor's redact adapter expects.
+        (working / "redaction_input.jsonl").write_text(
+            "\n".join(json.dumps({"ref": r, "spans": [], "reason_code": "pii"}) for r in refs)
+            + ("\n" if refs else "")
+        )
+        # Stand-in bake output so the export stub can package it.
+        redacted_dir = case_path / "redacted"
+        redacted_dir.mkdir(parents=True, exist_ok=True)
+        for r in refs:
+            (redacted_dir / f"{r}.txt").write_text("[REDACTED]\n")
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
+
     yield tmp_path
 
 

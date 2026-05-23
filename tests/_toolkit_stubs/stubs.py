@@ -332,45 +332,12 @@ def make_pii_discovery_stub() -> types.ModuleType:
     return mod
 
 
-# ─── redact / export ────────────────────────────────────────────────
-
-
-def make_redact_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_pipeline.redact")
-
-    def run(
-        case_path: Path,
-        *,
-        prefer_llm_entities: bool = False,
-        respect_dispute_halts: bool = True,
-    ) -> None:
-        # Write some "redacted" output files + a manifest with the
-        # upstream_hash so redact_verify can verify it.
-        redacted_dir = case_path / "redacted"
-        redacted_dir.mkdir(parents=True, exist_ok=True)
-        register = json.loads((case_path / "working" / "register.json").read_text())
-        for entry in register["refs"]:
-            (redacted_dir / f"{entry['ref']}.txt").write_text("[REDACTED]\n")
-
-        # Manifest anchored on tags + pii_collection + enforce flag.
-        from dsar_orchestrator.hash_chain import sha256_text
-
-        tags_dir = case_path / "working"
-        pairs = []
-        for p in sorted(tags_dir.glob("*_tags.json")):
-            pairs.append((p.name, sha256_file(p)))
-        pii_file = tags_dir / "pii_collection.jsonl"
-        pii_hash = sha256_file(pii_file) if pii_file.exists() else ""
-        upstream = sha256_text(
-            f"{hash_pairs(pairs)}\x1f{pii_hash}\x1fenforce={prefer_llm_entities}"
-        )
-        _write_json(
-            case_path / "working" / "redact_complete.json",
-            {"completed": True, "upstream_hash": upstream},
-        )
-
-    mod.run = run
-    return mod
+# ─── export ─────────────────────────────────────────────────────────
+#
+# NB: There is no `make_redact_stub` anymore. The redact adapter shells
+# out to ``dsar-redact`` and the integration fixtures monkeypatch its
+# subprocess runner with a fake that writes ``redaction_input.jsonl``
+# + the ``redacted/<ref>.txt`` files the export stub needs.
 
 
 def make_export_stub() -> types.ModuleType:
@@ -450,7 +417,6 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_pipeline.ingest": make_ingest_stub(),
         "dsar_pipeline.detect": make_detect_stub(),
         "dsar_pipeline.people_register": make_people_register_stub(),
-        "dsar_pipeline.redact": make_redact_stub(),
         "dsar_pipeline.export": make_export_stub(),
         # The conductor's embed step calls dsar_clients.tei_embed_client
         # directly (adapter pattern per toolkit issue #1), so we stub
