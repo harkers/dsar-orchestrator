@@ -110,3 +110,20 @@ forbidden_modules =
 # exceptions deliberately allowed: the synthesis CLI imports
 # __version__ from the package, which transitively loads exceptions.
 # Since exceptions is itself a leaf, there's no architectural concern.
+
+[importlinter:contract:9]
+name = adapters bridge to toolkit; may import config/hash_chain/exceptions only
+type = forbidden
+source_modules =
+    dsar_orchestrator.adapters
+forbidden_modules =
+    dsar_orchestrator.pipeline
+    dsar_orchestrator.cli
+    dsar_orchestrator.audit
+    dsar_orchestrator.stages
+    dsar_orchestrator.module_agents
+    dsar_orchestrator.log_analyser
+    dsar_orchestrator.synthesis
+# config + hash_chain + exceptions deliberately allowed: adapters
+# need CaseConfig + upstream_hash computation + typed errors.
+# `dsar_clients.*` (toolkit) imports are allowed; that's the whole point.

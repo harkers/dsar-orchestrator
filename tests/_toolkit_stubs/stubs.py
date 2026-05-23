@@ -79,28 +79,58 @@ def make_ingest_stub() -> types.ModuleType:
 # ─── embed ──────────────────────────────────────────────────────────
 
 
-def make_embed_core_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_embed.core")
+def make_tei_embed_client_stub() -> types.ModuleType:
+    """Stub for `dsar_clients.tei_embed_client` — the conductor's embed
+    adapter (per toolkit issue #1) calls this directly. Returns
+    deterministic 1024-d vectors so resume-cascade tests stay stable."""
+    mod = types.ModuleType("dsar_clients.tei_embed_client")
 
-    def embed_corpus(case_path: Path) -> None:
-        register_path = case_path / "working" / "register.json"
-        upstream = compute_register_hash(register_path)
-        register = json.loads(register_path.read_text())
-        rows = []
-        for entry in register["refs"]:
-            rows.append(
-                {
-                    "ref": entry["ref"],
-                    "embedding": [0.1, 0.2, 0.3] * 341 + [0.4],  # 1024-d stub
-                    "model": "stub-bge-m3",
-                    "upstream_hash": upstream,
-                    "schema_version": "1.0",
-                    "producer_version": "dsar_embed-stub 0.0",
-                }
-            )
-        _write_jsonl(case_path / "working" / "embeddings.jsonl", rows)
+    class EmbedResult:
+        def __init__(
+            self,
+            vectors: list[list[float]],
+            *,
+            error: str | None = None,
+        ) -> None:
+            self.vectors = vectors
+            self.model_alias = "embed"
+            self.resolved_model = "BAAI/bge-m3"
+            self.endpoint_url = "http://127.0.0.1:8085"
+            self.model_revision = "stub-rev"
+            self.latency_s = 0.001
+            self.error = error
 
-    mod.embed_corpus = embed_corpus
+        def as_audit_fields(self) -> dict[str, str | float]:
+            return {
+                "model_alias": self.model_alias,
+                "resolved_model": self.resolved_model,
+                "endpoint_url": self.endpoint_url,
+                "model_revision": self.model_revision,
+            }
+
+    def embed(
+        texts: list[str],
+        *,
+        timeout_s: int = 30,
+        retries: int = 2,
+        backoff_s: float = 1.0,
+        tei_url: str = "http://127.0.0.1:8085",
+    ) -> EmbedResult:
+        # Deterministic per-text vector: first byte of UTF-8 as a
+        # repeating value, padded to 1024 dims. Avoids randomness in
+        # tests; doesn't pretend to be meaningful embeddings.
+        vectors: list[list[float]] = []
+        for text in texts:
+            seed = (text.encode("utf-8")[0] if text else 0) / 255.0
+            vectors.append([seed] * 1024)
+        return EmbedResult(vectors=vectors)
+
+    def health(tei_url: str = "http://127.0.0.1:8085") -> bool:
+        return True
+
+    mod.EmbedResult = EmbedResult
+    mod.embed = embed
+    mod.health = health
     return mod
 
 
@@ -415,7 +445,10 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_pipeline.people_register": make_people_register_stub(),
         "dsar_pipeline.redact": make_redact_stub(),
         "dsar_pipeline.export": make_export_stub(),
-        "dsar_embed.core": make_embed_core_stub(),
+        # The conductor's embed step calls dsar_clients.tei_embed_client
+        # directly (adapter pattern per toolkit issue #1), so we stub
+        # the HTTP client rather than the not-yet-shipped dsar_embed.core.
+        "dsar_clients.tei_embed_client": make_tei_embed_client_stub(),
         "dsar_rerank.core": make_rerank_core_stub(),
         "dsar_pii_classifier.core": make_pii_classifier_stub(),
         "dsar_pii_discovery.core": make_pii_discovery_stub(),

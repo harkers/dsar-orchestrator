@@ -273,8 +273,15 @@ def _run_ingest(cfg: CaseConfig) -> None:
 
 
 def _run_embed(cfg: CaseConfig) -> None:
-    embed_core = _lazy_import("dsar_embed.core")
-    embed_core.embed_corpus(cfg.case_path)
+    # ADAPTER (retires when toolkit ships `dsar_embed.core.embed_corpus`
+    # per https://github.com/harkers/dsar-toolkit/issues/1):
+    # The conductor handles the corpus-level embed flow itself, using
+    # `dsar_clients.tei_embed_client.embed()` as the HTTP leaf.
+    # Output JSONL shape matches what the eventual toolkit module will
+    # produce, so the resume cascade is unaffected on retirement.
+    from dsar_orchestrator.adapters import embed as embed_adapter
+
+    embed_adapter.run_for_case(cfg)
     _check_module_work(cfg, "embed")
 
 
