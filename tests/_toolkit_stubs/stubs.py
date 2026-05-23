@@ -266,39 +266,41 @@ def make_rerank_core_stub() -> types.ModuleType:
 
 
 def make_pii_classifier_stub() -> types.ModuleType:
+    """Stub for the toolkit's `dsar_pii_classifier.core`.
+
+    The conductor's pii-classify adapter calls `discover_case(case_dir,
+    mode=...)` and gets back `{stage_no: [Finding, ...]}`. The adapter
+    then aggregates findings by ref and writes pii_collection.jsonl.
+
+    Stub returns one Finding per ref (one per *_tags.json file present
+    in working/) so the adapter's aggregation has something to produce.
+    """
     mod = types.ModuleType("dsar_pii_classifier.core")
 
-    def classify_case(
+    def discover_case(
         case_path: Path,
         *,
+        stages: tuple[int, ...] = (1, 2, 3),
+        plan=None,
         mode: str = "shadow",
-        subject_identifier=None,
-        budget_usd: float = 10.0,
-    ) -> None:
-        from dsar_orchestrator.hash_chain import sha256_text
-
-        # Hash inputs per the stages.py definition.
+    ) -> dict[int, list[dict]]:
         tags_dir = case_path / "working"
-        pairs = []
-        for p in sorted(tags_dir.glob("*_tags.json")):
-            pairs.append((p.name, sha256_file(p)))
-        tags_hash = hash_pairs(pairs)
-        subj = subject_identifier.primary_name if subject_identifier else ""
-        upstream = sha256_text(f"{tags_hash}\x1f{subj}\x1fmode={mode}")
-        rows = []
+        findings_by_stage: dict[int, list[dict]] = {s: [] for s in stages}
         for p in sorted(tags_dir.glob("*_tags.json")):
             ref = json.loads(p.read_text())["ref"]
-            rows.append(
+            # Drop one stub finding per ref into the first requested stage.
+            findings_by_stage[stages[0]].append(
                 {
                     "ref": ref,
-                    "in_scope_recheck": "confirmed",
-                    "entities": [],
-                    "upstream_hash": upstream,
+                    "surface": "James Carter",
+                    "type": "subject_name",
+                    "detector": "stub-detector",
+                    "confidence": 0.99,
                 }
             )
-        _write_jsonl(case_path / "working" / "pii_collection.jsonl", rows)
+        return findings_by_stage
 
-    mod.classify_case = classify_case
+    mod.discover_case = discover_case
     return mod
 
 

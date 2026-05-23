@@ -25,7 +25,6 @@ from pathlib import Path
 from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
 from dsar_orchestrator.config import CaseConfig, load_case_config, validate_phase_4_prereqs
 from dsar_orchestrator.exceptions import (
-    BudgetExceededError,
     DSARPipelineError,
     PipelineHalt,
 )
@@ -347,20 +346,14 @@ def _run_scope_classify(cfg: CaseConfig) -> None:
 
 
 def _run_pii_classify(cfg: CaseConfig) -> None:
-    pii_classify_core = _lazy_import("dsar_pii_classifier.core")
-    try:
-        pii_classify_core.classify_case(
-            cfg.case_path,
-            mode=cfg.pii_classify_mode,
-            subject_identifier=cfg.subject_identifier,
-            budget_usd=cfg.pii_budget_usd,
-        )
-    except Exception as e:
-        # Wrap a budget-class error into the orchestrator's typed exception
-        # so the caller sees a consistent surface.
-        if type(e).__name__ == "PIIBudgetExceeded":
-            raise BudgetExceededError(str(e)) from e
-        raise
+    # ADAPTER for pii_classify (retires when toolkit ships a thin
+    # `dsar_pii_classifier.core.classify_case_for_conductor(case_path)`
+    # entry that writes working/pii_collection.jsonl directly).
+    # Current adapter calls discover_case + aggregates per-stage
+    # findings into the per-ref shape the cascade expects.
+    from dsar_orchestrator.adapters import pii_classify as pii_classify_adapter
+
+    pii_classify_adapter.run_for_case(cfg)
     _check_module_work(cfg, "pii_classify")
 
 
