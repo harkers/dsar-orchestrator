@@ -40,40 +40,9 @@ def _read_case_scope(case_path: Path) -> str:
         return "test scope"
 
 
-# ─── ingest ────────────────────────────────────────────────────────
-
-
-def make_ingest_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_pipeline.ingest")
-
-    def run(case_path: Path) -> None:
-        src = case_path / "source"
-        working = case_path / "working"
-        working.mkdir(parents=True, exist_ok=True)
-
-        # Hash the source tree, build a synthetic register.
-        pairs = []
-        refs = []
-        if src.exists():
-            for i, p in enumerate(sorted(src.rglob("*"))):
-                if p.is_file():
-                    rel = str(p.relative_to(src))
-                    pairs.append((rel, sha256_file(p)))
-                    refs.append(
-                        {
-                            "ref": f"{case_path.name}-{i + 1:04d}",
-                            "text_path": str(p.relative_to(case_path)),
-                        }
-                    )
-        register = {
-            "case_no": case_path.name,
-            "refs": refs,
-            "upstream_hash": hash_pairs(pairs),
-        }
-        _write_json(working / "register.json", register)
-
-    mod.run = run
-    return mod
+# NB: There is no `make_ingest_stub` anymore — the ingest adapter
+# shells out to `python -m dsar_pipeline.ingest` and the integration
+# fixtures monkeypatch its subprocess runner directly.
 
 
 # ─── embed ──────────────────────────────────────────────────────────
@@ -384,7 +353,6 @@ def make_redact_verify_stub() -> types.ModuleType:
 
 def all_stubs() -> dict[str, types.ModuleType]:
     return {
-        "dsar_pipeline.ingest": make_ingest_stub(),
         "dsar_pipeline.detect": make_detect_stub(),
         "dsar_pipeline.people_register": make_people_register_stub(),
         # The conductor's embed step calls dsar_clients.tei_embed_client

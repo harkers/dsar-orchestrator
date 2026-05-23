@@ -266,8 +266,11 @@ def _check_module_work(cfg: CaseConfig, sub_stage: str) -> None:
 
 
 def _run_ingest(cfg: CaseConfig) -> None:
-    ingest = _lazy_import("dsar_pipeline.ingest")
-    ingest.run(cfg.case_path)
+    # ADAPTER for ingest (retires when toolkit ships
+    # `dsar_pipeline.ingest.run_for_case(case_path, subject_name)`).
+    from dsar_orchestrator.adapters import ingest as ingest_adapter
+
+    ingest_adapter.run_for_case(cfg)
     _check_module_work(cfg, "ingest")
 
 

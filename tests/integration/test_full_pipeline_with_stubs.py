@@ -43,6 +43,44 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
     # Redirect ~/.dsar-audit/ into tmp_path so we don't pollute the real one.
     monkeypatch.setenv("HOME", str(tmp_path))
 
+    # Mock the ingest adapter's subprocess runner so tests don't
+    # shell out to `python -m dsar_pipeline.ingest`. The fake walks
+    # source/ and writes a synthetic register.json (mirroring what
+    # the toolkit's ingest would produce).
+    import subprocess as _subprocess_for_ingest
+
+    from dsar_orchestrator.adapters import ingest as _ingest
+    from dsar_orchestrator.hash_chain import hash_pairs as _hp
+    from dsar_orchestrator.hash_chain import sha256_file as _sf
+
+    def _fake_ingest_runner(argv, env, cwd):
+        case_path = Path(cwd)
+        src = case_path / "source"
+        working = case_path / "working"
+        working.mkdir(parents=True, exist_ok=True)
+        pairs: list[tuple[str, str]] = []
+        refs: list[dict] = []
+        if src.exists():
+            for i, p in enumerate(sorted(src.rglob("*"))):
+                if p.is_file():
+                    rel = str(p.relative_to(src))
+                    pairs.append((rel, _sf(p)))
+                    refs.append(
+                        {
+                            "ref": f"{case_path.name}-{i + 1:04d}",
+                            "text_path": str(p.relative_to(case_path)),
+                        }
+                    )
+        register = {
+            "case_no": case_path.name,
+            "refs": refs,
+            "upstream_hash": _hp(pairs),
+        }
+        (working / "register.json").write_text(json.dumps(register))
+        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
+
     # Mock the scope-classify adapter's subprocess runner so tests
     # don't try to invoke `dsar-scope-check`. The runner writes a
     # minimal scope_verdicts.jsonl that the adapter then reads to

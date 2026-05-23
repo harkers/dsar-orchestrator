@@ -42,6 +42,43 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
     case_dir_root = tmp_path / "dsars" / "cases"
     case_dir_root.mkdir(parents=True)
 
+    # Mock the ingest adapter's subprocess runner — see
+    # tests/integration/test_full_pipeline_with_stubs.py for the
+    # equivalent in the other integration suite.
+    import subprocess as _subprocess_for_ingest
+
+    from dsar_orchestrator.adapters import ingest as _ingest
+    from dsar_orchestrator.hash_chain import hash_pairs as _hp
+    from dsar_orchestrator.hash_chain import sha256_file as _sf
+
+    def _fake_ingest_runner(argv, env, cwd):
+        case_path = Path(cwd)
+        src = case_path / "source"
+        working = case_path / "working"
+        working.mkdir(parents=True, exist_ok=True)
+        pairs: list[tuple[str, str]] = []
+        refs: list[dict] = []
+        if src.exists():
+            for i, p in enumerate(sorted(src.rglob("*"))):
+                if p.is_file():
+                    rel = str(p.relative_to(src))
+                    pairs.append((rel, _sf(p)))
+                    refs.append(
+                        {
+                            "ref": f"{case_path.name}-{i + 1:04d}",
+                            "text_path": str(p.relative_to(case_path)),
+                        }
+                    )
+        register = {
+            "case_no": case_path.name,
+            "refs": refs,
+            "upstream_hash": _hp(pairs),
+        }
+        (working / "register.json").write_text(json.dumps(register))
+        return _subprocess_for_ingest.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
+
     # Mock the scope-classify adapter's subprocess runner — see
     # tests/integration/test_full_pipeline_with_stubs.py for the
     # equivalent in the other integration suite.
