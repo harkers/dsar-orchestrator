@@ -307,9 +307,22 @@ def _run_people_register(cfg: CaseConfig) -> None:
 
 def _run_scope_filter_chain(cfg: CaseConfig) -> None:
     """Stage 3's chained scope_prefilter → dsar_rerank branch."""
-    detect = _lazy_import("dsar_pipeline.detect")
-    detect.run_scope_prefilter(cfg.case_path)
+    # ADAPTER for scope_prefilter (retires when the toolkit ships
+    # `dsar_pipeline.scope_prefilter.run_for_case(case_path)` —
+    # see harkers/dsar-toolkit#1 reply with the prioritised adapter
+    # list). The conductor reads embeddings.jsonl, embeds the case
+    # scope via tei_embed_client, runs the cosine prefilter math
+    # itself, writes cosine_prefilter.jsonl with the cascade's
+    # required upstream_hash field.
+    from dsar_orchestrator.adapters import scope_prefilter as scope_prefilter_adapter
+
+    scope_prefilter_adapter.run_for_case(cfg)
     _check_module_work(cfg, "scope_prefilter")
+
+    # Rerank still goes through the toolkit-stub-or-lazy-import path.
+    # Awaiting the resolution of toolkit issue #4 (is `dsar_rerank` a
+    # standalone module or does it live inside `dsar_pii_classifier`?)
+    # before writing a conductor-side rerank adapter.
     if cfg.rerank_mode != "off":
         rerank_core = _lazy_import("dsar_rerank.core")
         rerank_core.rerank_case(
