@@ -104,6 +104,24 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
 
+    # Mock the export adapter's runner so tests don't actually shell
+    # out to dsar-bake / python -m dsar_pipeline.export. The fake
+    # treats bake as a no-op (the redact fake already wrote
+    # redacted/<ref>.txt) and produces a minimal output/ tree.
+    from dsar_orchestrator.adapters import export as _export
+
+    def _fake_export_runner(argv, env, cwd):
+        if argv[0] != "dsar-bake":
+            output = Path(cwd) / "output"
+            output.mkdir(parents=True, exist_ok=True)
+            redacted = Path(cwd) / "redacted"
+            if redacted.exists():
+                for p in redacted.iterdir():
+                    (output / (p.stem + ".pdf")).write_text(p.read_text())
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_export, "_default_runner", lambda: _fake_export_runner)
+
     yield tmp_path
 
 

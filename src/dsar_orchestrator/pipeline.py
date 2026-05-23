@@ -381,8 +381,11 @@ def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
 
 
 def _run_export(cfg: CaseConfig) -> None:
-    export = _lazy_import("dsar_pipeline.export")
-    export.run(cfg.case_path)
+    # ADAPTER for export (retires when toolkit ships
+    # `dsar_pipeline.export.run_for_case(case_path)`).
+    from dsar_orchestrator.adapters import export as export_adapter
+
+    export_adapter.run_for_case(cfg)
     _check_module_work(cfg, "export")
 
 

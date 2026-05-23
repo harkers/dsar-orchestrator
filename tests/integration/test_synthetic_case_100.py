@@ -94,6 +94,22 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
 
+    # Mock the export adapter's runner; same shape as in
+    # tests/integration/test_full_pipeline_with_stubs.py.
+    from dsar_orchestrator.adapters import export as _export
+
+    def _fake_export_runner(argv, env, cwd):
+        if argv[0] != "dsar-bake":
+            output = Path(cwd) / "output"
+            output.mkdir(parents=True, exist_ok=True)
+            redacted = Path(cwd) / "redacted"
+            if redacted.exists():
+                for p in redacted.iterdir():
+                    (output / (p.stem + ".pdf")).write_text(p.read_text())
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_export, "_default_runner", lambda: _fake_export_runner)
+
     result = synthesize_case("800500", case_dir_root)
     return result
 

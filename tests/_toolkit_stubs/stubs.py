@@ -332,40 +332,10 @@ def make_pii_discovery_stub() -> types.ModuleType:
     return mod
 
 
-# ─── export ─────────────────────────────────────────────────────────
-#
-# NB: There is no `make_redact_stub` anymore. The redact adapter shells
-# out to ``dsar-redact`` and the integration fixtures monkeypatch its
-# subprocess runner with a fake that writes ``redaction_input.jsonl``
-# + the ``redacted/<ref>.txt`` files the export stub needs.
-
-
-def make_export_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_pipeline.export")
-
-    def run(case_path: Path) -> None:
-        redacted_dir = case_path / "redacted"
-        if not redacted_dir.exists():
-            return
-        out_dir = case_path / "output"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        # Just copy each redacted file as the "exported" PDF surrogate.
-        for p in redacted_dir.iterdir():
-            (out_dir / (p.stem + ".pdf")).write_text(p.read_text())
-
-        # Manifest with upstream = hash of redacted/ tree
-        pairs: list[tuple[str, str]] = []
-        for p in sorted(redacted_dir.rglob("*")):
-            if p.is_file():
-                rel = str(p.relative_to(redacted_dir))
-                pairs.append((rel, sha256_file(p)))
-        _write_json(
-            out_dir / "manifest.json",
-            {"completed": True, "upstream_hash": hash_pairs(pairs)},
-        )
-
-    mod.run = run
-    return mod
+# NB: There is no `make_redact_stub` or `make_export_stub` anymore.
+# The redact + export adapters shell out (to `dsar-redact`, `dsar-bake`,
+# `python -m dsar_pipeline.export`) and the integration fixtures
+# monkeypatch their subprocess runners directly.
 
 
 # ─── redact_verify ─────────────────────────────────────────────────
@@ -417,7 +387,6 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_pipeline.ingest": make_ingest_stub(),
         "dsar_pipeline.detect": make_detect_stub(),
         "dsar_pipeline.people_register": make_people_register_stub(),
-        "dsar_pipeline.export": make_export_stub(),
         # The conductor's embed step calls dsar_clients.tei_embed_client
         # directly (adapter pattern per toolkit issue #1), so we stub
         # the HTTP client rather than the not-yet-shipped dsar_embed.core.
