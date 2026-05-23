@@ -424,10 +424,13 @@ def test_scope_classify_happy(tmp_path: Path) -> None:
         case_path / "working" / "scope_classify_complete.jsonl",
         [{"completed": True, "upstream_hash": "h"}],
     )
-    for ref in ("a", "b"):
-        (case_path / "working" / f"{ref}_tags.json").write_text(
-            json.dumps({"ref": ref, "in_scope": True})
-        )
+    _jsonl(
+        case_path / "working" / "scope_verdicts.jsonl",
+        [
+            {"ref": "a", "scope_verdict": "present"},
+            {"ref": "b", "scope_verdict": "present"},
+        ],
+    )
     result = check_scope_classify(_make_cfg(case_path))
     assert result.ok is True
 

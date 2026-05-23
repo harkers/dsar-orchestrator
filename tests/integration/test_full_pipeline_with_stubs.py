@@ -43,6 +43,35 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
     # Redirect ~/.dsar-audit/ into tmp_path so we don't pollute the real one.
     monkeypatch.setenv("HOME", str(tmp_path))
 
+    # Mock the scope-classify adapter's subprocess runner so tests
+    # don't try to invoke `dsar-scope-check`. The runner writes a
+    # minimal scope_verdicts.jsonl that the adapter then reads to
+    # build its cascade anchor.
+    import subprocess as _subprocess
+
+    from dsar_orchestrator.adapters import scope_classify as _scope_classify
+
+    def _fake_scope_check_runner(argv, env):
+        # Parse out the case_no + case_root from argv/env
+        case_no = argv[argv.index("--case") + 1]
+        case_root = Path(env.get("DSAR_CASE_ROOT", ""))
+        case_path = case_root / case_no
+        verdicts_path = case_path / "working" / "scope_verdicts.jsonl"
+        # Read register.json (written by ingest stub) so we have refs
+        register_path = case_path / "working" / "register.json"
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            refs = [r["ref"] for r in register.get("refs", [])]
+        else:
+            refs = []
+        verdicts_path.write_text(
+            "\n".join(json.dumps({"ref": r, "scope_verdict": "present"}) for r in refs)
+            + ("\n" if refs else "")
+        )
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_scope_classify, "_default_runner", lambda: _fake_scope_check_runner)
+
     yield tmp_path
 
 

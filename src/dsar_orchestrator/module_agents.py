@@ -309,6 +309,18 @@ def check_rerank(cfg: CaseConfig) -> ModuleCheckResult:
 
 
 def check_scope_classify(cfg: CaseConfig) -> ModuleCheckResult:
+    """Validate scope_classify stage outputs.
+
+    The toolkit's scope_check_stage writes ``scope_verdicts.jsonl``
+    (per-ref scope determination: present / not_present / ambiguous).
+    The conductor's adapter writes ``scope_classify_complete.jsonl``
+    as the cascade anchor on top of it.
+
+    Per-ref `_tags.json` files used to be listed here, but those are
+    actually produced by pii_identification_stage downstream, not
+    scope_check. The agent now validates the verdicts file + the
+    cascade anchor only.
+    """
     complete_path = cfg.case_path / "working" / "scope_classify_complete.jsonl"
     if not complete_path.exists():
         return _critical(
@@ -326,24 +338,35 @@ def check_scope_classify(cfg: CaseConfig) -> ModuleCheckResult:
             ["scope_classify_complete.jsonl first row missing upstream_hash"],
             _rerun_hint("scope_classify", cfg.case_no),
         )
-    # Tag files should exist for every register ref
+    # The toolkit writes scope_verdicts.jsonl as the per-ref source of truth.
+    verdicts_path = cfg.case_path / "working" / "scope_verdicts.jsonl"
+    if not verdicts_path.exists():
+        return _critical(
+            [f"scope_verdicts.jsonl missing at {verdicts_path}"],
+            _rerun_hint("scope_classify", cfg.case_no),
+        )
+    verdict_rows = _load_jsonl(verdicts_path)
+    if not verdict_rows:
+        return _warning(
+            ["scope_verdicts.jsonl is empty"],
+            _rerun_hint("scope_classify", cfg.case_no),
+        )
+    # Cross-check: every register ref should have a verdict.
     register = _load_register(cfg)
     if register:
-        working = cfg.case_path / "working"
-        register_refs = [entry["ref"] for entry in register.get("refs", [])]
-        missing_tags: list[str] = []
-        for ref in register_refs:
-            tags_path = working / f"{ref}_tags.json"
-            if not tags_path.exists():
-                missing_tags.append(ref)
-            if len(missing_tags) >= 5:
-                break
-        if missing_tags:
+        register_refs = {entry["ref"] for entry in register.get("refs", [])}
+        verdict_refs = {row.get("ref") for row in verdict_rows}
+        missing = register_refs - verdict_refs
+        if missing:
+            sample = sorted(missing)[:5]
             return _critical(
-                [f"missing tags files for refs: {missing_tags}"],
+                [
+                    f"scope_verdicts.jsonl missing verdicts for "
+                    f"{len(missing)} refs (sample: {sample})"
+                ],
                 _rerun_hint("scope_classify", cfg.case_no),
             )
-    return _ok(["scope_classify complete; tags written for all refs"])
+    return _ok([f"scope_classify complete: {len(verdict_rows)} verdicts"])
 
 
 # ─── pii_classify ───────────────────────────────────────────────────

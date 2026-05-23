@@ -41,6 +41,32 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     case_dir_root = tmp_path / "dsars" / "cases"
     case_dir_root.mkdir(parents=True)
+
+    # Mock the scope-classify adapter's subprocess runner — see
+    # tests/integration/test_full_pipeline_with_stubs.py for the
+    # equivalent in the other integration suite.
+    import subprocess as _subprocess
+
+    from dsar_orchestrator.adapters import scope_classify as _scope_classify
+
+    def _fake_scope_check_runner(argv, env):
+        case_no = argv[argv.index("--case") + 1]
+        case_root = Path(env.get("DSAR_CASE_ROOT", ""))
+        case_path = case_root / case_no
+        register_path = case_path / "working" / "register.json"
+        refs = []
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            refs = [r["ref"] for r in register.get("refs", [])]
+        verdicts_path = case_path / "working" / "scope_verdicts.jsonl"
+        verdicts_path.write_text(
+            "\n".join(json.dumps({"ref": r, "scope_verdict": "present"}) for r in refs)
+            + ("\n" if refs else "")
+        )
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_scope_classify, "_default_runner", lambda: _fake_scope_check_runner)
+
     result = synthesize_case("800500", case_dir_root)
     return result
 

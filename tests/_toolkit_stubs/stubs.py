@@ -142,6 +142,9 @@ def make_detect_stub() -> types.ModuleType:
 
     def run_2_1_to_2_4(case_path: Path) -> None:
         # Read register, write per-ref tag stubs + a manifest.
+        # In the toolkit, pii_identification_stage writes <ref>_tags.json
+        # files; the stub bundles that here so downstream stub stages
+        # (pii_classify) have something to read.
         register = json.loads((case_path / "working" / "register.json").read_text())
         upstream = compute_register_hash(case_path / "working" / "register.json")
         rows = []
@@ -153,6 +156,8 @@ def make_detect_stub() -> types.ModuleType:
                     "upstream_hash": upstream,
                 }
             )
+            tags_path = case_path / "working" / f"{entry['ref']}_tags.json"
+            _write_json(tags_path, {"ref": entry["ref"], "in_scope": True})
         _write_jsonl(case_path / "working" / "detect_entities.jsonl", rows)
 
     def run_people_register(case_path: Path) -> None:

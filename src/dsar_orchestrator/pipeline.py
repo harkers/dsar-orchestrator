@@ -336,8 +336,13 @@ def _run_scope_filter_chain(cfg: CaseConfig) -> None:
 
 
 def _run_scope_classify(cfg: CaseConfig) -> None:
-    detect = _lazy_import("dsar_pipeline.detect")
-    detect.run_scope_classify(cfg.case_path)
+    # ADAPTER for scope_classify (retires when toolkit ships
+    # `dsar_pipeline.scope_check_stage.run_for_case(case_path)` —
+    # the heavy `ScopeCheckStage` class isn't a clean adapter target
+    # so the bridge shells out to the `dsar-scope-check` CLI).
+    from dsar_orchestrator.adapters import scope_classify as scope_classify_adapter
+
+    scope_classify_adapter.run_for_case(cfg)
     _check_module_work(cfg, "scope_classify")
 
 
