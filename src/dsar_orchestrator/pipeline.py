@@ -323,19 +323,15 @@ def _run_scope_filter_chain(cfg: CaseConfig) -> None:
     scope_prefilter_adapter.run_for_case(cfg)
     _check_module_work(cfg, "scope_prefilter")
 
-    # Rerank still goes through the toolkit-stub-or-lazy-import path.
-    # Awaiting the resolution of toolkit issue #4 (is `dsar_rerank` a
-    # standalone module or does it live inside `dsar_pii_classifier`?)
-    # before writing a conductor-side rerank adapter.
+    # ADAPTER for rerank (Contract B / issue #11; retires when toolkit
+    # ships `dsar_pipeline.rerank.run_for_case(case_path)`). The
+    # conductor reads cosine_prefilter.jsonl, calls TEI's bge-reranker-large
+    # via dsar_clients.tei_rerank_client.rerank_pairs, writes
+    # scope_rerank.jsonl with the cascade's required upstream_hash field.
     if cfg.rerank_mode != "off":
-        rerank_core = _lazy_import("dsar_rerank.core")
-        rerank_core.rerank_case(
-            cfg.case_path,
-            mode=cfg.rerank_mode,
-            threshold=cfg.rerank_threshold,
-            top_n=cfg.rerank_top_n,
-            sample_rate=cfg.rerank_sample_rate,
-        )
+        from dsar_orchestrator.adapters import rerank as rerank_adapter
+
+        rerank_adapter.run_for_case(cfg)
         _check_module_work(cfg, "rerank")
 
 
