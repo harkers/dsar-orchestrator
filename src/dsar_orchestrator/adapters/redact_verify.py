@@ -73,11 +73,7 @@ def run_for_case(cfg: CaseConfig, *, verify_fn: VerifyFn | None = None) -> None:
     if not getattr(verdict, "all_passed", False):
         failed_count = getattr(verdict, "failed_doc_count", "?")
         summary = getattr(verdict, "failed_verifier_summary", "")
-        audit_log = getattr(
-            verdict,
-            "audit_log_path",
-            cfg.case_path / "working" / "post_bake_findings.jsonl",
-        )
+        audit_log = verdict.audit_log_path
         raise PipelineHalt(
             f"case={cfg.case_no} redact-verify failed: "
             f"{failed_count} doc(s) flagged ({summary}). "

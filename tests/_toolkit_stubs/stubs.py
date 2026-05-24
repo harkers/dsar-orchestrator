@@ -262,7 +262,10 @@ def make_post_bake_verify_stub() -> types.ModuleType:
             self.audit_log_path = case_path / "working" / "post_bake_findings.jsonl"
 
     def verify_for_conductor(case_path: Path) -> Verdict:
-        # Stub: write a passing verdict to the audit log.
+        # Stub: write a passing per-finding row to the audit log, matching
+        # the real toolkit's post_bake_verify_stage.py row shape
+        # (ref/page/gate/severity/issue/evidence/suggested_action/metadata/iteration/ts).
+        import datetime
 
         redacted_dir = case_path / "redacted"
         pairs: list[tuple[str, str]] = []
@@ -273,13 +276,21 @@ def make_post_bake_verify_stub() -> types.ModuleType:
         upstream = hash_pairs(pairs)
         findings_path = case_path / "working" / "post_bake_findings.jsonl"
         findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with open(findings_path, "a") as f:
             f.write(
                 json.dumps(
                     {
-                        "event": "verify_complete",
-                        "passed": True,
-                        "upstream_hash": upstream,
+                        "ref": "fake-ref-1",
+                        "page": None,
+                        "gate": "stub",
+                        "severity": "low",
+                        "issue": "stub verifier passes",
+                        "evidence": None,
+                        "suggested_action": None,
+                        "metadata": {"upstream_hash": upstream},
+                        "iteration": 1,
+                        "ts": ts,
                     }
                 )
                 + "\n"
