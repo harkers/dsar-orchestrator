@@ -1,0 +1,38 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versioning: see [`VERSIONING.md`](VERSIONING.md).
+
+## [Unreleased]
+
+### Added
+- `VERSIONING.md` documenting the package/schema/producer version policy.
+- `CHANGELOG.md` (this file).
+- `docs/superpowers/brainstorms/2026-05-24-v5-paused-notes.md` capturing the in-flight v5 pipeline-orchestration brainstorm.
+
+## [0.1.0] - 2026-05-23
+
+Initial tagged release. State as of commit `cd1594f` (immediately after
+the v4 adapter sprint).
+
+### Added
+- 8-coarse-stage DAG (`ingest → embed → detect → people_register →
+  scope_prefilter → rerank → scope_classify → pii_classify → redact →
+  redact_verify → export`).
+- `dsar-conductor` CLI with `--check`, `--force`, `--from`, `--only`,
+  `--acknowledge-issues`.
+- v4 adapter layer: 10 adapters under `src/dsar_orchestrator/adapters/`
+  with single-injectable-dependency contract and per-adapter retirement
+  triggers. See `docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v4.md`.
+- Resume cascade via `upstream_hash` chain on every artefact row.
+- Module-agent validation framework (`src/dsar_orchestrator/module_agents.py`).
+- Log analyser with critical-finding block flag (`src/dsar_orchestrator/log_analyser/`).
+- Synthetic-case generator (`dsar-synthesize-case` CLI).
+- Local LLM audit-log reviewer (`dsar-analyse-logs` CLI; mlx-broker-backed).
+- 282 passing tests; 9 import-linter contracts.
+- Schema and producer-version stamping on every artefact row
+  (`SCHEMA_VERSION = "1.0"`, per-module `PRODUCER_VERSION`).
+
+[Unreleased]: https://github.com/harkers/dsar-orchestrator/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/harkers/dsar-orchestrator/releases/tag/v0.1.0
