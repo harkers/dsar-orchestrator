@@ -364,6 +364,12 @@ def check_scope_classify(cfg: CaseConfig) -> ModuleCheckResult:
 
 VALID_RECHECK_VERDICTS = {"confirmed", "disputed", "uncertain"}
 
+# Contract B / issue #12: in-scope-positive verdict set from
+# dsar_pipeline.scope_check_stage. "present" is the only verdict the
+# toolkit's pii_classifier actually processes (verified via cross-test
+# 2026-05-24 — "ambiguous" and "not_present" both fall out).
+IN_SCOPE_POSITIVE_VERDICTS: frozenset[str] = frozenset({"present"})
+
 
 def check_pii_classify(cfg: CaseConfig) -> ModuleCheckResult:
     if cfg.pii_classify_mode == "off":
@@ -371,8 +377,27 @@ def check_pii_classify(cfg: CaseConfig) -> ModuleCheckResult:
     path = cfg.case_path / "working" / "pii_collection.jsonl"
     rows = _load_jsonl(path)
     if not rows:
+        # Contract B / issue #12 (interim): empty pii_collection is OK
+        # when scope_classify produced 0 in-scope-positive verdicts.
+        # Critical only when scope had in-scope docs that should have
+        # produced findings. Long-term fix lives in the toolkit
+        # (harkers/dsar-toolkit#120) — see VERSIONING.md §4.
+        scope_rows = _load_jsonl(cfg.case_path / "working" / "scope_verdicts.jsonl")
+        in_scope_count = sum(
+            1 for r in scope_rows if r.get("verdict") in IN_SCOPE_POSITIVE_VERDICTS
+        )
+        if in_scope_count == 0:
+            return _ok(
+                [
+                    "pii_collection.jsonl empty; no in-scope docs from "
+                    "scope_classify so nothing to classify"
+                ]
+            )
         return _critical(
-            [f"pii_collection.jsonl missing or empty at {path}"],
+            [
+                f"pii_collection.jsonl missing or empty at {path}; "
+                f"scope_verdicts shows {in_scope_count} in-scope docs"
+            ],
             _rerun_hint("pii_classify", cfg.case_no),
         )
     missing = _all_have(rows, ("ref", "in_scope_recheck", "entities", "upstream_hash"))
