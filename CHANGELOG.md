@@ -6,6 +6,14 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-24
+
+### Fixed — bake adapter sets DSAR_AUTO_SIGNOFF=1 on synthetic cases
+
+- Paired with toolkit v0.3.2 which added the `DSAR_AUTO_SIGNOFF=1` env var that auto-writes a synthetic signoff after redact. Conductor's bake adapter sets it when `cfg.synthetic` is True.
+- Real operator cases (`cfg.synthetic=False`) unchanged — still need explicit `dsar-pipeline --signoff '<reviewer>'`.
+- `PRODUCER_VERSION` on `adapters/bake.py` bumped to 0.4.6.
+
 ## [0.4.5] - 2026-05-24
 
 ### Fixed — bake adapter skips toolkit MRA post-stage hooks

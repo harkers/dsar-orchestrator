@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.5"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.6"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 
@@ -76,6 +76,12 @@ def run_for_case(
     # The hook is best-effort dashboard health checks; the conductor's
     # own check_<stage> agents cover validation we actually need.
     env.setdefault("DSAR_PIPELINE_SKIP_MRA", "1")
+    # Synthetic cases have no operator to sign off — toolkit v0.3.2 added
+    # DSAR_AUTO_SIGNOFF=1 which auto-writes a synthetic signoff after
+    # redact (with proper timestamp ordering). Real operator cases must
+    # sign off via dsar-pipeline --signoff '<reviewer>' as before.
+    if cfg.synthetic:
+        env.setdefault("DSAR_AUTO_SIGNOFF", "1")
 
     argv = [bake_cli, "--case", cfg.case_no]
     result = runner(argv, env, cfg.case_path)
