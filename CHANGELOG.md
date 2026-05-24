@@ -6,6 +6,16 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-24
+
+### Fixed — ingest adapter writes data_subject.json from subject_identifier
+
+- The toolkit's bake (and redact) stages read `working/data_subject.json` with a `full_name` field. The conductor's `case_config.json` instead carries `subject_identifier.primary_name`. Synthetic cases and operator-created cases generally don't write `data_subject.json`; the toolkit's bake exits 3 with "data_subject.json missing or no full_name field".
+- `adapters/ingest.py` now writes `working/data_subject.json` from `cfg.subject_identifier` on every run: `{full_name, aliases, dob?, employee_id?}`. Atomic write; idempotent. `PRODUCER_VERSION` bumped to 0.4.2.
+- 3 new tests in `test_adapter_ingest.py`: full payload, optional-fields-omitted, subject-identifier-missing-skips-write.
+- Hermetic count: 306 passing (was 303).
+- Unblocks Contract B cross-test bake stage.
+
 ## [0.4.1] - 2026-05-24
 
 ### Fixed — check_verify_spec distinguishes missing from empty

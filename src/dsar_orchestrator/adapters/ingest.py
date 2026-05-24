@@ -21,6 +21,7 @@ writes the conductor-meta sidecar itself, this adapter retires.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -31,7 +32,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file, write_register_meta
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.4.2"
 SCHEMA_VERSION = "1.0"
 
 # runner(argv, env, cwd) -> CompletedProcess
@@ -82,6 +83,44 @@ def run_for_case(cfg: CaseConfig, *, runner: RunnerFn | None = None) -> None:
         )
 
     _ensure_upstream_hash(cfg.case_path, register_path)
+    _ensure_data_subject_json(cfg)
+
+
+def _ensure_data_subject_json(cfg: CaseConfig) -> None:
+    """Write ``working/data_subject.json`` from ``cfg.subject_identifier``.
+
+    The toolkit's redact + bake stages both read this file; the toolkit
+    has no awareness of the conductor's `case_config.json`. The conductor
+    writes the bridging file here once at ingest so every downstream stage
+    that needs subject metadata finds it.
+
+    Cross-test 2026-05-24 (post toolkit#125): bake exited 3 with
+    'data_subject.json missing or no full_name field' on synthetic
+    cases — the synth case generator writes case_config.json but not
+    data_subject.json. This adapter closes that gap on every ingest.
+
+    Always overwrites (cheap; ingest just ran).
+    """
+    if cfg.subject_identifier is None:
+        # No subject identifier (rare; phase-4 validation usually catches).
+        # Don't write a malformed file; bake will fail with its own error.
+        return
+    out_path = cfg.case_path / "working" / "data_subject.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "full_name": cfg.subject_identifier.primary_name,
+        "aliases": list(cfg.subject_identifier.aliases),
+    }
+    if cfg.subject_identifier.dob:
+        payload["dob"] = cfg.subject_identifier.dob
+    if cfg.subject_identifier.employee_id:
+        payload["employee_id"] = cfg.subject_identifier.employee_id
+    tmp_path = out_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, out_path)
 
 
 def _ensure_upstream_hash(case_path: Path, register_path: Path) -> None:

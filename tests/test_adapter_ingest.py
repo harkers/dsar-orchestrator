@@ -187,3 +187,65 @@ def test_no_temp_file_leftover(tmp_path: Path) -> None:
     adapter.run_for_case(_make_cfg(case_path), runner=_fake_runner_writes_register(case_path))
     working = case_path / "working"
     assert not any(p.suffix == ".tmp" for p in working.iterdir())
+
+
+# ─── data_subject.json bridging (v0.4.2) ────────────────────────────
+
+
+def test_ingest_writes_data_subject_json_from_subject_identifier(tmp_path: Path) -> None:
+    """The toolkit's bake stage reads working/data_subject.json with a
+    full_name field. The conductor's case_config.json instead has
+    subject_identifier.primary_name. Ingest adapter bridges by writing
+    data_subject.json from cfg.subject_identifier on every run."""
+    case_path = _seed_case(tmp_path)
+    cfg = CaseConfig(
+        case_no=case_path.name,
+        case_path=case_path,
+        case_scope="t",
+        subject_identifier=SubjectIdentifier(
+            primary_name="James Carter",
+            dob="1985-03-12",
+            employee_id="FIN-0241",
+            aliases=["J. Carter", "Jim Carter"],
+        ),
+    )
+
+    adapter.run_for_case(cfg, runner=_fake_runner_writes_register(case_path))
+
+    out_path = case_path / "working" / "data_subject.json"
+    assert out_path.exists()
+    payload = json.loads(out_path.read_text())
+    assert payload["full_name"] == "James Carter"
+    assert payload["dob"] == "1985-03-12"
+    assert payload["employee_id"] == "FIN-0241"
+    assert payload["aliases"] == ["J. Carter", "Jim Carter"]
+
+
+def test_ingest_data_subject_json_omits_optional_when_unset(tmp_path: Path) -> None:
+    case_path = _seed_case(tmp_path)
+    cfg = CaseConfig(
+        case_no=case_path.name,
+        case_path=case_path,
+        case_scope="t",
+        subject_identifier=SubjectIdentifier(primary_name="J"),
+    )
+
+    adapter.run_for_case(cfg, runner=_fake_runner_writes_register(case_path))
+
+    payload = json.loads((case_path / "working" / "data_subject.json").read_text())
+    assert payload["full_name"] == "J"
+    assert payload["aliases"] == []
+    assert "dob" not in payload
+    assert "employee_id" not in payload
+
+
+def test_ingest_skips_data_subject_json_when_subject_identifier_missing(
+    tmp_path: Path,
+) -> None:
+    """If subject_identifier is None (rare — phase-4 validation usually
+    catches), don't write a malformed file. Bake will then fail with its
+    own clearer error."""
+    case_path = _seed_case(tmp_path)
+    cfg = _make_cfg(case_path, subject_name=None)
+    adapter.run_for_case(cfg, runner=_fake_runner_writes_register(case_path))
+    assert not (case_path / "working" / "data_subject.json").exists()
