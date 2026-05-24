@@ -286,7 +286,7 @@ def test_synthetic_case_resume_skips_everything_on_second_run(
     every coarse stage."""
     case = synthetic_100_case
     first = run(case.case_no, case_root=case.case_path)
-    assert len(first.stages_run) == 9
+    assert len(first.stages_run) == 10
 
     second = run(case.case_no, case_root=case.case_path)
     # Everything is fresh; nothing actually re-ran

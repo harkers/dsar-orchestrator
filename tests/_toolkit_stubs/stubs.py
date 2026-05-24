@@ -16,6 +16,7 @@ from dsar_orchestrator.hash_chain import (
     compute_register_hash,
     hash_pairs,
     sha256_file,
+    sha256_text,
 )
 
 
@@ -302,6 +303,56 @@ def make_post_bake_verify_stub() -> types.ModuleType:
     return mod
 
 
+# ─── verify_spec ────────────────────────────────────────────────────
+
+
+def make_verify_spec_stub() -> types.ModuleType:
+    mod = types.ModuleType("dsar_pipeline.verify_spec")
+
+    class Verdict:
+        def __init__(self, case_path: Path) -> None:
+            self.all_passed = True
+            self.failed_doc_count = 0
+            self.failed_verifier_summary = ""
+            self.audit_log_path = case_path / "working" / "verify_spec_findings.jsonl"
+
+    def verify_for_conductor(case_path: Path) -> Verdict:
+        # Stub: write a passing per-finding row to the audit log, matching
+        # the real toolkit's verify_spec row shape (check/ref/issue/...).
+        import datetime
+
+        working = case_path / "working"
+        plan_path = working / "redaction_input.jsonl"
+        evidence_path = working / "pii_findings.jsonl"
+        # Hash the upstream the way the real verifier reads it (plan + evidence).
+        plan_hash = sha256_file(plan_path) if plan_path.exists() else ""
+        evidence_hash = sha256_file(evidence_path) if evidence_path.exists() else ""
+        upstream = sha256_text(f"{plan_hash}\x1f{evidence_hash}")
+        findings_path = working / "verify_spec_findings.jsonl"
+        findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with open(findings_path, "a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "check": "stub",
+                        "ref": None,
+                        "severity": "low",
+                        "issue": "stub spec-verifier passes",
+                        "evidence": None,
+                        "upstream_hash": upstream,
+                        "metadata": {},
+                        "ts": ts,
+                    }
+                )
+                + "\n"
+            )
+        return Verdict(case_path)
+
+    mod.verify_for_conductor = verify_for_conductor
+    return mod
+
+
 # ─── registry ───────────────────────────────────────────────────────
 
 
@@ -315,5 +366,6 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_rerank.core": make_rerank_core_stub(),
         "dsar_pii_classifier.core": make_pii_classifier_stub(),
         "dsar_pii_discovery.core": make_pii_discovery_stub(),
+        "dsar_pipeline.verify_spec": make_verify_spec_stub(),
         "dsar_pipeline.post_bake_verify": make_post_bake_verify_stub(),
     }
