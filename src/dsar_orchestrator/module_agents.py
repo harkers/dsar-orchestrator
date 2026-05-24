@@ -92,7 +92,7 @@ def check_ingest(cfg: CaseConfig) -> ModuleCheckResult:
     """Validate ingest output. Per Contract A (issue #8): register.json
     is a toolkit-owned flat list; conductor metadata (upstream_hash etc.)
     lives in working/register_meta.json."""
-    from dsar_orchestrator.hash_chain import read_register, read_register_meta, text_path_for_ref
+    from dsar_orchestrator.register import read_register, read_register_meta, text_path_for_ref
 
     register_path = cfg.case_path / "working" / "register.json"
     if not register_path.exists():
@@ -526,7 +526,7 @@ def _load_register(cfg: CaseConfig) -> list[dict] | None:
     """Best-effort load of working/register.json as a flat list (per
     Contract A / issue #8). Returns None if absent or invalid
     (downstream agents fall back to non-cross-checked validation)."""
-    from dsar_orchestrator.hash_chain import read_register
+    from dsar_orchestrator.register import read_register
 
     p = cfg.case_path / "working" / "register.json"
     if not p.exists():
