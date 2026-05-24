@@ -6,6 +6,19 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-24
+
+### Fixed — auto-resolve detect flags on synthetic cases (closes #18)
+
+- The toolkit's bake stage delegates to legacy `redact_all` which refuses to ship while any `*_tags.json` entity has `redact: "flag"` (third-party items the detect stage couldn't auto-classify). Real operator workflow expects a human to inspect each and set `redact: true|false`. Synthetic cases have no operator, halting the cross-test indefinitely.
+- New `synthetic: bool` field on `CaseConfig` (loaded from `case_config.json::synthetic`, set by `dsar-synthesize-case`).
+- `adapters/bake.py::_auto_resolve_synthetic_flags` walks `working/*_tags.json` and rewrites every `redact: "flag"` to `redact: false` when `cfg.synthetic` is True. Atomic per-file writes. Called by `run_for_case` before invoking `dsar-bake`.
+- Real operator cases (`cfg.synthetic=False`) are unaffected — flag resolution remains their explicit call.
+- `PRODUCER_VERSION` on `adapters/bake.py` bumped to 0.4.3.
+- 3 new tests in `test_adapter_bake.py`: synthetic-rewrites-flag, non-synthetic-leaves-intact, synthetic-no-tags-no-op.
+- Hermetic count: 309 passing (was 306).
+- Decision rationale: Option 1 from #18 (conductor-side, scoped to synthetic). Operator-facing flag-resolution UX is a separate concern; this fix is surgical and unblocks Contract B cross-test bake stage.
+
 ## [0.4.2] - 2026-05-24
 
 ### Fixed — ingest adapter writes data_subject.json from subject_identifier

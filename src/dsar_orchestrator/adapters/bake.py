@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.3"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 
@@ -60,6 +60,14 @@ def run_for_case(
     if runner is None:
         runner = _default_runner()
 
+    # Issue #18: synthetic cases have no operator to resolve detect-stage
+    # flag entries. Auto-mark them as redact:false before bake invokes
+    # the legacy redact_all path (which refuses to ship while flags
+    # remain unresolved). Real operator cases (cfg.synthetic=False) are
+    # untouched — flag resolution remains the operator's call.
+    if cfg.synthetic:
+        _auto_resolve_synthetic_flags(cfg.case_path)
+
     env = dict(os.environ)
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
 
@@ -79,6 +87,41 @@ def run_for_case(
 
     upstream_hash = _hash_redaction_input(cfg.case_path / "working" / "redaction_input.jsonl")
     _write_manifest(cfg.case_path, upstream_hash)
+
+
+def _auto_resolve_synthetic_flags(case_path: Path) -> int:
+    """Rewrite any ``redact: "flag"`` entry in ``working/*_tags.json`` to
+    ``redact: false`` so the toolkit's bake (which delegates to legacy
+    redact_all) doesn't refuse to ship while unresolved flags remain.
+
+    Synthetic cases have no operator in the loop. Real operator cases
+    bypass this helper entirely (cfg.synthetic=False; see issue #18).
+
+    Returns: count of entries rewritten across all tags files (for tests).
+    """
+    working = case_path / "working"
+    if not working.exists():
+        return 0
+    resolved = 0
+    for tags_file in sorted(working.glob("*_tags.json")):
+        try:
+            data = json.loads(tags_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        changed = False
+        for entity in data.get("entities", []):
+            if entity.get("redact") == "flag":
+                entity["redact"] = False
+                resolved += 1
+                changed = True
+        if changed:
+            tmp = tags_file.with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, tags_file)
+    return resolved
 
 
 def _hash_redaction_input(plan_path: Path) -> str:

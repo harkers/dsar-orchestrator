@@ -80,6 +80,13 @@ class CaseConfig:
     # Cross-cutting
     llm_concurrency: int = 5
 
+    # Test / synthetic case marker. Set by dsar-synthesize-case in the
+    # generated case_config.json. The bake adapter consults this to
+    # auto-resolve detect-stage flag entries (which have no human in
+    # the loop for synthetic data). Real operator cases default False
+    # and must resolve flags explicitly. See dsar-orchestrator#18.
+    synthetic: bool = False
+
 
 def _read_override_file(name: str) -> str | None:
     """Read the contents of a ~/.dsar-<name>-mode file, if present."""
@@ -166,6 +173,7 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
             "REDACT_VERIFY_ENABLED", raw.get("redact_verify_enabled", True)
         ),
         llm_concurrency=int(os.environ.get("DSAR_LLM_CONCURRENCY", raw.get("llm_concurrency", 5))),
+        synthetic=bool(raw.get("synthetic", False)),
     )
     return cfg
 
