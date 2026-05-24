@@ -33,7 +33,7 @@ from dsar_orchestrator.exceptions import (
 # plan. Ordered by data dependency.
 #
 # Two-level addressing:
-#   STAGE_ORDER lists the 9 coarse stages (--from/--through use these
+#   STAGE_ORDER lists the 10 coarse stages (--from/--through use these
 #   because resuming mid-parallel-group is awkward).
 #   SUB_STAGES_BY_STAGE breaks each coarse stage into its constituent
 #   surgical-re-run targets (--only accepts these as well).
@@ -44,6 +44,7 @@ STAGE_ORDER: tuple[str, ...] = (
     "scope_classify",
     "pii_classify",
     "redact",
+    "verify_spec",  # NEW in v5.5 (pre-bake plan check)
     "bake",  # NEW in v5.0
     "verify_pdf",
     "export",
@@ -58,6 +59,7 @@ SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "scope_classify": ("scope_classify",),
     "pii_classify": ("pii_classify",),
     "redact": ("redact",),
+    "verify_spec": ("verify_spec",),  # NEW in v5.5
     "bake": ("bake",),  # NEW in v5.0
     "verify_pdf": ("verify_pdf",),
     "export": ("export",),
@@ -380,6 +382,23 @@ def _run_redact(cfg: CaseConfig) -> None:
     _check_module_work(cfg, "redact")
 
 
+def _run_verify_spec(cfg: CaseConfig) -> RunReport | None:
+    """Returns None on success; raises PipelineHalt on any verifier failure.
+
+    Pre-bake spec verifier: catches plan-level mistakes before bake
+    spends multi-minute work on a doomed redaction plan. Always-on
+    (no enable flag) — operators skip via ``--from bake`` or later.
+    """
+    # ADAPTER for verify_spec (retires when toolkit deprecates the
+    # `dsar_pipeline.verify_spec.verify_for_conductor` entry — unlikely
+    # since the contract is already locked).
+    from dsar_orchestrator.adapters import verify_spec as verify_spec_adapter
+
+    verify_spec_adapter.run_for_case(cfg)
+    _check_module_work(cfg, "verify_spec")
+    return None
+
+
 def _run_bake(cfg: CaseConfig) -> None:
     # ADAPTER for bake (retires when toolkit ships
     # `dsar_pipeline.bake.run_for_case(case_path)` — not yet filed).
@@ -512,17 +531,22 @@ def run(
             with StageBanner(audit, "redact"):
                 _run_redact(cfg)
 
-        # Stage 7 — bake (v5.0; was inside export adapter)
+        # Stage 7 — verify-spec (v5.5; pre-bake plan check, halt-on-fail)
+        if plan.includes("verify_spec"):
+            with StageBanner(audit, "verify_spec"):
+                _run_verify_spec(cfg)
+
+        # Stage 8 — bake (v5.0; was inside export adapter)
         if plan.includes("bake"):
             with StageBanner(audit, "bake"):
                 _run_bake(cfg)
 
-        # Stage 8 — verify-pdf (Phase 6, halt-on-fail)
+        # Stage 9 — verify-pdf (Phase 6, halt-on-fail)
         if plan.includes("verify_pdf"):
             with StageBanner(audit, "verify_pdf"):
                 _run_verify_pdf(cfg)
 
-        # Stage 9 — export
+        # Stage 10 — export
         if plan.includes("export"):
             with StageBanner(audit, "export"):
                 _run_export(cfg)

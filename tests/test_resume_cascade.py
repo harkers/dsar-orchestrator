@@ -181,7 +181,7 @@ def test_run_force_flag_bypasses_cascade(tmp_path: Path) -> None:
     _write_fresh_embeddings(case_path)
     # --force + --check together: prints the plan with everything in it
     report = run(case_path.name, case_root=case_path, check=True, force=True)
-    # With force=True + check=True, the would-be-run stages are all 9.
+    # With force=True + check=True, the would-be-run stages are all 10.
     # (stages_skipped here is the orchestrator's "would have run" list
     # when check=True; we just confirm it's the full set.)
     assert "ingest" in report.stages_skipped
@@ -205,6 +205,7 @@ def test_skip_fresh_artefacts_false_includes_everything(tmp_path: Path) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "verify_spec",
         "bake",
         "verify_pdf",
         "export",
