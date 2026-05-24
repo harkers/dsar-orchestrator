@@ -23,7 +23,6 @@ from dsar_orchestrator.module_agents import (
     check_ingest,
     check_people_register,
     check_pii_classify,
-    check_pii_discovery,
     check_redact,
     check_verify_pdf,
     check_rerank,
@@ -247,34 +246,6 @@ def test_detect_happy(tmp_path: Path) -> None:
         ],
     )
     result = check_detect_2_1_to_2_4(_make_cfg(case_path))
-    assert result.ok is True
-
-
-# ─── pii_discovery ─────────────────────────────────────────────────
-
-
-def test_pii_discovery_skipped_when_disabled(tmp_path: Path) -> None:
-    case_path = _make_case(tmp_path)
-    cfg = _make_cfg(case_path, discovery_enabled=False)
-    result = check_pii_discovery(cfg)
-    assert result.ok is True
-    assert "skipping" in result.findings[0]
-
-
-def test_pii_discovery_critical_when_missing(tmp_path: Path) -> None:
-    case_path = _make_case(tmp_path)
-    result = check_pii_discovery(_make_cfg(case_path))
-    assert result.ok is False
-    assert result.severity == "critical"
-
-
-def test_pii_discovery_happy(tmp_path: Path) -> None:
-    case_path = _make_case(tmp_path)
-    _jsonl(
-        case_path / "working" / "pii_discovery.jsonl",
-        [{"ref": "x", "entities": [], "upstream_hash": "h"}],
-    )
-    result = check_pii_discovery(_make_cfg(case_path))
     assert result.ok is True
 
 

@@ -90,10 +90,10 @@ def test_env_budget_override(case_root: Path, monkeypatch) -> None:
     assert cfg.pii_budget_usd == 20.0
 
 
-def test_env_discovery_disable(case_root: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DISCOVERY_ENABLED", "false")
-    cfg = load_case_config("300001", case_root=case_root)
-    assert cfg.discovery_enabled is False
+# NB: test_env_discovery_disable removed in Contract B / #10 — the
+# DISCOVERY_ENABLED env-var override was deleted along with the
+# pii_discovery stage; the config field remains as a deprecated no-op
+# carrier (removal target = v0.5.0).
 
 
 # ─── validate_phase_4_prereqs ───

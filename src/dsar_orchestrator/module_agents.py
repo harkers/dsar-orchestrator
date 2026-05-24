@@ -206,25 +206,6 @@ def check_detect_2_1_to_2_4(cfg: CaseConfig) -> ModuleCheckResult:
     return _ok([f"detect_entities.jsonl: {len(rows)} rows"])
 
 
-# ─── pii_discovery ──────────────────────────────────────────────────
-
-
-def check_pii_discovery(cfg: CaseConfig) -> ModuleCheckResult:
-    if not cfg.discovery_enabled:
-        return _ok(["DISCOVERY_ENABLED=false; skipping"])
-    path = cfg.case_path / "working" / "pii_discovery.jsonl"
-    rows = _load_jsonl(path)
-    if not rows:
-        return _critical(
-            [f"pii_discovery.jsonl missing or empty at {path}"],
-            _rerun_hint("pii_discovery", cfg.case_no),
-        )
-    missing = _all_have(rows, ("ref", "entities", "upstream_hash"))
-    if missing:
-        return _critical(missing, _rerun_hint("pii_discovery", cfg.case_no))
-    return _ok([f"pii_discovery.jsonl: {len(rows)} rows"])
-
-
 # ─── people_register ────────────────────────────────────────────────
 
 
@@ -603,7 +584,6 @@ CHECKERS: dict[str, callable] = {
     "ingest": check_ingest,
     "embed": check_embed,
     "detect_2_1_to_2_4": check_detect_2_1_to_2_4,
-    "pii_discovery": check_pii_discovery,
     "people_register": check_people_register,
     "scope_prefilter": check_scope_prefilter,
     "rerank": check_rerank,

@@ -73,15 +73,6 @@ def test_real_toolkit_ingest_through_embed(real_synthetic_case, monkeypatch) -> 
     # Redirect HOME so the audit log goes under tmp_path
     monkeypatch.setenv("HOME", str(case.case_path.parent.parent.parent))
 
-    # Disable pii_discovery (toolkit doesn't ship dsar_pii_discovery yet)
-    # so stage_2_parallel only runs embed + detect.
-    import json as _json
-
-    config_path = case.case_path / "case_config.json"
-    config = _json.loads(config_path.read_text())
-    config["discovery_enabled"] = False
-    config_path.write_text(_json.dumps(config))
-
     # Run up to (and including) stage_2_parallel — skip LLM stages.
     report = run(
         case.case_no,

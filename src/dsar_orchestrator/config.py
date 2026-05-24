@@ -158,7 +158,10 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
         pii_budget_usd=float(
             os.environ.get("DSAR_PII_BUDGET_USD", raw.get("pii_budget_usd", 10.0))
         ),
-        discovery_enabled=_resolve_bool("DISCOVERY_ENABLED", raw.get("discovery_enabled", True)),
+        # Deprecated in v0.4.0 (Contract B / #10). Kept as no-op for one
+        # release; removal target = v0.5.0. The pii_discovery stage no
+        # longer exists.
+        discovery_enabled=bool(raw.get("discovery_enabled", True)),
         redact_verify_enabled=_resolve_bool(
             "REDACT_VERIFY_ENABLED", raw.get("redact_verify_enabled", True)
         ),

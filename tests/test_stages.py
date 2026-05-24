@@ -73,7 +73,6 @@ def test_registry_has_all_sub_stages() -> None:
         "ingest",
         "embed",
         "detect_2_1_to_2_4",
-        "pii_discovery",
         "people_register",
         "scope_prefilter",
         "rerank",
