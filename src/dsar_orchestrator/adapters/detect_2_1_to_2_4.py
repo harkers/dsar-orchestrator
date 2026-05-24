@@ -31,7 +31,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import compute_register_hash
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.detect_2_1_to_2_4 0.1.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.detect_2_1_to_2_4 0.3.0"
 SCHEMA_VERSION = "1.0"
 
 # runner(argv, env, cwd) -> CompletedProcess

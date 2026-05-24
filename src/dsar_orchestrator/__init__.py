@@ -4,7 +4,7 @@ See docs/superpowers/specs/2026-05-24-pipeline-orchestration-design-v5.md
 for the authoritative design.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from dsar_orchestrator.exceptions import (
     BudgetExceededError,

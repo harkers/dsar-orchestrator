@@ -29,7 +29,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file, sha256_text
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.redact 0.1.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.redact 0.3.0"
 SCHEMA_VERSION = "1.0"
 DEFAULT_CLI = "dsar-redact"
 

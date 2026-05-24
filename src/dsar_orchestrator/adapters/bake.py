@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.2.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.3.0"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 

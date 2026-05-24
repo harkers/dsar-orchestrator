@@ -14,11 +14,23 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 - Hermetic test fixtures across 10 test files updated to produce the toolkit's flat-list shape — prevents drift from re-introducing the bug.
 - New `tests/integration/test_real_toolkit_smoke.py` (gated behind `@pytest.mark.needs_toolkit`) exercises the conductor's ingest adapter against the real toolkit; would have caught the bug on first run. Self-skips when toolkit / TEI / spaCy model not available.
 
-### Added
+### Added — v5.5 (rollout B phase 2)
+- New `verify_spec` coarse stage (Stage 7 in the new 10-stage numbering) — pre-bake plan-level verifier. New `adapters/verify_spec.py` lazy-imports `dsar_pipeline.verify_spec.verify_for_conductor` (toolkit-shipped 2026-05-24); halt message includes the toolkit's `audit_log_path` field. Always-on (no enable flag — operators skip via `--from bake` or later).
+- New `check_verify_spec` module-agent validator + registry entry. Mirror of `check_verify_pdf` at the new pre-bake stage.
+- New `make_verify_spec_stub` in `tests/_toolkit_stubs/stubs.py`. Writes audit rows in the real toolkit's verify_spec shape (check/ref/severity/issue/…); `upstream_hash` at top level so resume cascade reads it.
+- `log_analyser/collectors.py` extended: `WORKING_KNOWN_LOGS` now includes `verify_spec_findings.jsonl`; `basic_stats.verify_failed_count` counts severity-high rows across both files (spec + post-bake).
+- 6 new tests in `tests/test_adapter_verify_spec.py` covering happy path, failure halt, audit_log_path in message, resume hint, missing-optional-fields tolerance.
+
+### Changed — v5.5
+- **BREAKING (pre-1.0 waiver applies):** Stage numbering shifts again — bake is now Stage 8 (was 7), verify_pdf is Stage 9 (was 8), export is Stage 10 (was 9). Resume cascade for in-flight v5.0 cases is not preserved; restart from `--from redact`.
+- All adapter `PRODUCER_VERSION` strings bumped to `0.3.0` in lockstep per VERSIONING.md §3 (the `<package_version>` portion tracks the conductor's `__version__`).
+- Conductor version: `0.2.0` → `0.3.0` (MINOR per pre-1.0 waiver: additive new stage + breaking on stage numbering shift).
+
+### Added — v5.0 (rollout B phase 1)
 - `VERSIONING.md` documenting the package/schema/producer version policy.
 - `CHANGELOG.md` (this file).
 - `docs/superpowers/brainstorms/2026-05-24-v5-paused-notes.md` capturing the in-flight v5 pipeline-orchestration brainstorm.
-- New `bake` coarse stage (Stage 7 in the new numbering) — extracted from the export adapter. New `adapters/bake.py` subprocess wrapper around `dsar-bake --case <id>`. Writes cascade-anchor manifest at `working/redact_v4/bake_manifest.json`.
+- New `bake` coarse stage (Stage 7 in v5.0; Stage 8 after v5.5) — extracted from the export adapter. New `adapters/bake.py` subprocess wrapper around `dsar-bake --case <id>`. Writes cascade-anchor manifest at `working/redact_v4/bake_manifest.json`.
 - New `adapters/verify_pdf.py` (renamed from `adapters/redact_verify.py`) — rewired to the real `dsar_pipeline.post_bake_verify.verify_for_conductor` toolkit entry. Halt message now includes the toolkit's `audit_log_path` field.
 - New `check_bake` module-agent validator + registry entry.
 - New `check_verify_pdf` module-agent validator (renamed from `check_redact_verify`).
