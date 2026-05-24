@@ -207,7 +207,7 @@ def test_synthesize_then_pipeline_full_run(synthetic_100_case) -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     ):
         assert stage in report.stages_run, f"stage {stage} did not run"
@@ -227,7 +227,7 @@ def test_synthesize_then_pipeline_full_run(synthetic_100_case) -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     } <= stages_with_end
 
@@ -257,7 +257,7 @@ def test_synthetic_case_all_module_agents_pass(synthetic_100_case) -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     }
     assert expected <= sub_stages_with_rows

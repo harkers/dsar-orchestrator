@@ -25,7 +25,7 @@ from dsar_orchestrator.module_agents import (
     check_pii_classify,
     check_pii_discovery,
     check_redact,
-    check_redact_verify,
+    check_verify_pdf,
     check_rerank,
     check_scope_classify,
     check_scope_prefilter,
@@ -519,19 +519,19 @@ def test_redact_happy(tmp_path: Path) -> None:
     assert result.ok is True
 
 
-# ─── redact_verify ──────────────────────────────────────────────────
+# ─── verify_pdf ─────────────────────────────────────────────────────
 
 
 def test_redact_verify_skipped_when_disabled(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
     cfg = _make_cfg(case_path, redact_verify_enabled=False)
-    result = check_redact_verify(cfg)
+    result = check_verify_pdf(cfg)
     assert result.ok is True
 
 
 def test_redact_verify_critical_when_log_missing(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
-    result = check_redact_verify(_make_cfg(case_path))
+    result = check_verify_pdf(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "critical"
 
@@ -545,7 +545,7 @@ def test_redact_verify_happy(tmp_path: Path) -> None:
             {"ref": "D002", "gate": "gate_density", "severity": "medium", "issue": "warn"},
         ],
     )
-    result = check_redact_verify(_make_cfg(case_path))
+    result = check_verify_pdf(_make_cfg(case_path))
     assert result.ok is True
 
 
@@ -565,7 +565,7 @@ def test_redact_verify_critical_on_recorded_failure(tmp_path: Path) -> None:
             },
         ],
     )
-    result = check_redact_verify(_make_cfg(case_path))
+    result = check_verify_pdf(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "critical"
 

@@ -223,10 +223,10 @@ STAGE_ARTEFACTS: dict[str, StageArtefact] = {
         "working/redact_v4/bake_manifest.json",
         _hash_bake_inputs,
     ),
-    "redact_verify": StageArtefact(
-        "redact_verify",
-        "redact_verify",
-        "~/.dsar-audit/<case>/redact_verify.jsonl",
+    "verify_pdf": StageArtefact(
+        "verify_pdf",
+        "verify_pdf",
+        "working/post_bake_findings.jsonl",  # toolkit-owned; was ~/.dsar-audit/<case>/redact_verify.jsonl
         _hash_redacted_dir,
     ),
     # Export produces output/ — anchored on a manifest similarly.

@@ -288,7 +288,8 @@ def make_post_bake_verify_stub() -> types.ModuleType:
                         "issue": "stub verifier passes",
                         "evidence": None,
                         "suggested_action": None,
-                        "metadata": {"upstream_hash": upstream},
+                        "upstream_hash": upstream,
+                        "metadata": {},
                         "iteration": 1,
                         "ts": ts,
                     }

@@ -80,7 +80,7 @@ def test_registry_has_all_sub_stages() -> None:
         "scope_classify",
         "pii_classify",
         "redact",
-        "redact_verify",
+        "verify_pdf",
         "export",
     }
     assert expected_subs.issubset(set(STAGE_ARTEFACTS.keys()))

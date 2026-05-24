@@ -1,4 +1,4 @@
-"""Conductor-owned redact-verify adapter — Stage 7 (renamed to verify_pdf in v5.0 Phase 3).
+"""verify-pdf adapter — Stage 8 in v5.0.
 
 Bridges to the toolkit's ``dsar_pipeline.post_bake_verify.verify_for_conductor``.
 The verifier inspects redacted output + emits per-finding rows to
@@ -26,7 +26,7 @@ from typing import Any
 from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError, PipelineHalt
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.redact_verify 0.1.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.verify_pdf 0.2.0"
 
 # Injectable verifier: (case_path) -> Verdict-like.
 # Production resolution lazy-imports dsar_pipeline.post_bake_verify.verify_for_conductor.

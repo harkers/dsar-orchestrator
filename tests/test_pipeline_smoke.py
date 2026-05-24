@@ -25,7 +25,7 @@ def test_stage_order_includes_all_nine_stages() -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     )
 
@@ -55,8 +55,8 @@ def test_stage_plan_skips_verify_when_disabled(case_root: Path, monkeypatch):
     monkeypatch.setenv("REDACT_VERIFY_ENABLED", "false")
     cfg = load_case_config("300001", case_root=case_root)
     plan = build_stage_plan(case_root, cfg, None, None, None)
-    assert "redact_verify" not in plan.stages
-    assert ("redact_verify", "REDACT_VERIFY_ENABLED=false") in plan.skipped
+    assert "verify_pdf" not in plan.stages
+    assert ("verify_pdf", "REDACT_VERIFY_ENABLED=false") in plan.skipped
 
 
 def test_stage_plan_from_redact(case_root: Path):

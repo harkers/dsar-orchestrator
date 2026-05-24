@@ -206,7 +206,7 @@ def test_skip_fresh_artefacts_false_includes_everything(tmp_path: Path) -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     ]
     # Nothing skipped via the cascade; only phase-disabled exclusions

@@ -247,7 +247,7 @@ def test_full_pipeline_completes_with_stubs(staged_case: Path) -> None:
     assert "pii_classify" in report.stages_run
     assert "redact" in report.stages_run
     assert "bake" in report.stages_run
-    assert "redact_verify" in report.stages_run
+    assert "verify_pdf" in report.stages_run
     assert "export" in report.stages_run
 
     # Artefacts written
@@ -284,7 +284,7 @@ def test_full_pipeline_emits_audit_log(staged_case: Path) -> None:
         "pii_classify",
         "redact",
         "bake",
-        "redact_verify",
+        "verify_pdf",
         "export",
     ):
         assert "stage_start" in events_by_stage.get(stage, [])
