@@ -6,6 +6,15 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-24
+
+### Fixed — bake adapter skips toolkit MRA post-stage hooks
+
+- After v0.4.4 cleared synthetic flags, bake's legacy `redact_all` invoked the toolkit's MRA post-stage hook which raises `ModuleNotFoundError: No module named 'module_agents'` (a toolkit-internal package not part of the conductor's runtime contract). Toolkit provides `DSAR_PIPELINE_SKIP_MRA=1` as a documented opt-out; conductor's bake adapter now sets it.
+- MRA hooks are toolkit-internal dashboard health checks. The conductor's own `check_<stage>` module agents cover the validation we actually need.
+- `PRODUCER_VERSION` on `adapters/bake.py` bumped to 0.4.5.
+- No new tests (env-var addition; verified via cross-test).
+
 ## [0.4.4] - 2026-05-24
 
 ### Fixed — synthetic-flag helper also clears register.json::notes (#18 round 2)
