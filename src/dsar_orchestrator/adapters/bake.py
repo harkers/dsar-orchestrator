@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.4"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.5"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 
@@ -70,6 +70,12 @@ def run_for_case(
 
     env = dict(os.environ)
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
+    # Skip the toolkit's MRA post-stage hooks (internal QA tooling that
+    # imports a `module_agents` package not part of the conductor's
+    # runtime contract; without this the hook raises ImportError mid-bake).
+    # The hook is best-effort dashboard health checks; the conductor's
+    # own check_<stage> agents cover validation we actually need.
+    env.setdefault("DSAR_PIPELINE_SKIP_MRA", "1")
 
     argv = [bake_cli, "--case", cfg.case_no]
     result = runner(argv, env, cfg.case_path)
