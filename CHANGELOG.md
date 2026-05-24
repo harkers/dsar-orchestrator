@@ -6,6 +6,17 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-24
+
+### Fixed — synthetic-flag helper also clears register.json::notes (#18 round 2)
+
+- v0.4.3 cleared `redact: "flag"` entries in `*_tags.json` but legacy `redact_all` also checks `register.json::notes` for the string `"flagged for review"` (set by the toolkit's detect stage when entities are flagged). Cross-test still halted: "Items flagged for review remain unresolved".
+- Extended `_auto_resolve_synthetic_flags` to clear register.json `notes` fields containing "flagged for review" when `cfg.synthetic` is True. Contract A invariant respected (register.json mutation scoped to synth only; conductor metadata stays in the sidecar).
+- New helper `_clear_synthetic_register_notes` (atomic write).
+- 2 new tests: synth-clears-notes, non-synth-preserves-notes.
+- `PRODUCER_VERSION` on `adapters/bake.py` bumped to 0.4.4.
+- Hermetic count: 311 passing (was 309).
+
 ## [0.4.3] - 2026-05-24
 
 ### Fixed — auto-resolve detect flags on synthetic cases (closes #18)

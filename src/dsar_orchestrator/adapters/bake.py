@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.3"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.4"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 
@@ -91,11 +91,22 @@ def run_for_case(
 
 def _auto_resolve_synthetic_flags(case_path: Path) -> int:
     """Rewrite any ``redact: "flag"`` entry in ``working/*_tags.json`` to
-    ``redact: false`` so the toolkit's bake (which delegates to legacy
-    redact_all) doesn't refuse to ship while unresolved flags remain.
+    ``redact: false`` AND clear ``"flagged for review"`` notes in
+    ``working/register.json``, so the toolkit's bake (which delegates
+    to legacy redact_all) doesn't refuse to ship.
+
+    Two signals to clear:
+      - Per-entity ``redact: "flag"`` in *_tags.json files (detect output).
+      - Per-doc ``notes: "<N> items flagged for review"`` in register.json
+        (also detect output; this is what legacy redact_all checks first).
 
     Synthetic cases have no operator in the loop. Real operator cases
     bypass this helper entirely (cfg.synthetic=False; see issue #18).
+
+    Contract A note: this helper mutates register.json (toolkit-owned)
+    only on synthetic cases — register.json's notes field is operator-
+    workflow state, not the conductor-owned cascade metadata that
+    Contract A reserves for the sibling register_meta.json.
 
     Returns: count of entries rewritten across all tags files (for tests).
     """
@@ -121,7 +132,34 @@ def _auto_resolve_synthetic_flags(case_path: Path) -> int:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, tags_file)
+
+    _clear_synthetic_register_notes(working / "register.json")
     return resolved
+
+
+def _clear_synthetic_register_notes(register_path: Path) -> None:
+    """Clear ``notes`` fields containing "flagged for review" from
+    register.json. Synthetic-only; called by _auto_resolve_synthetic_flags."""
+    if not register_path.exists():
+        return
+    try:
+        register = json.loads(register_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(register, list):  # Contract A: register is a flat list
+        return
+    changed = False
+    for doc in register:
+        if isinstance(doc, dict) and "flagged for review" in (doc.get("notes") or ""):
+            doc["notes"] = ""
+            changed = True
+    if changed:
+        tmp = register_path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(register, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, register_path)
 
 
 def _hash_redaction_input(plan_path: Path) -> str:
