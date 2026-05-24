@@ -18,6 +18,24 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 - `VERSIONING.md` documenting the package/schema/producer version policy.
 - `CHANGELOG.md` (this file).
 - `docs/superpowers/brainstorms/2026-05-24-v5-paused-notes.md` capturing the in-flight v5 pipeline-orchestration brainstorm.
+- New `bake` coarse stage (Stage 7 in the new numbering) — extracted from the export adapter. New `adapters/bake.py` subprocess wrapper around `dsar-bake --case <id>`. Writes cascade-anchor manifest at `working/redact_v4/bake_manifest.json`.
+- New `adapters/verify_pdf.py` (renamed from `adapters/redact_verify.py`) — rewired to the real `dsar_pipeline.post_bake_verify.verify_for_conductor` toolkit entry. Halt message now includes the toolkit's `audit_log_path` field.
+- New `check_bake` module-agent validator + registry entry.
+- New `check_verify_pdf` module-agent validator (renamed from `check_redact_verify`).
+
+### Changed
+- **BREAKING (pre-1.0 waiver applies):** Stage `redact_verify` renamed to `verify_pdf`. `--from redact_verify` / `--only redact_verify` no longer accepted by `dsar-conductor`; use `--from verify_pdf` instead.
+- **BREAKING (pre-1.0 waiver applies):** Stage numbering shifts — `export` is now Stage 9 (was Stage 8); `verify_pdf` is Stage 8 (was redact_verify at Stage 7); `bake` is the new Stage 7 (was inside Stage 8 export). Resume cascade for in-flight v4 cases is not preserved; restart from `--from redact`.
+- Verify stage now runs **after** bake (was before), so `dsar_pipeline.post_bake_verify.verify_for_conductor` can actually see `<case>/redacted/`. Closes #1.
+- `STAGE_ARTEFACTS["verify_pdf"].artefact_relpath` updates to `working/post_bake_findings.jsonl` (toolkit-owned write target), replacing the v4 `~/.dsar-audit/<case>/redact_verify.jsonl` path.
+- `adapters/export.py` slimmed — no longer invokes `dsar-bake`; only runs `python -m dsar_pipeline.export`. Manifest at `output/manifest.json` unchanged.
+- `PRODUCER_VERSION` strings in `verify_pdf`, `bake`, and `export` adapters bumped to `0.2.0`.
+
+### Fixed
+- #1 — `adapters/redact_verify.py` no longer imports the fictional `dsar_redact_verify.core` module. Toolkit ships `dsar_pipeline.post_bake_verify.verify_for_conductor` as of 2026-05-24; adapter rewired (closed by the rename to verify_pdf).
+
+### Coordination
+- Requires dsar-toolkit at HEAD or a release tag including the merged `dsar_pipeline.post_bake_verify.verify_for_conductor` + `dsar_pipeline.verifier_verdict.Verdict` (4-field) work. If toolkit hasn't cut such a tag at conductor PR merge time, the `pyproject.toml` pin stays at `dsar-pipeline >= 0.2.0` and an editable install at toolkit HEAD is the operator's responsibility.
 
 ## [0.1.0] - 2026-05-23
 
