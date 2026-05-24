@@ -6,6 +6,14 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+### Fixed — 0.1.1 (issue #8: register.json shape)
+- Closes #8 — conductor's `register.json` consumers were assuming a dict envelope `{refs: [...], upstream_hash, schema_version, producer_version}` but the real toolkit writes a **flat list** of file-record dicts. End-to-end runs crashed at ingest with `AttributeError: 'list' object has no attribute 'get'`. Hermetic tests passed because the in-test stubs synthesised dict-shape registers.
+- **Contract A**: conductor adapts to the toolkit's flat-list shape. Conductor-owned metadata (`upstream_hash`, `schema_version`, `producer_version`) moves to a sibling file `working/register_meta.json` written by the conductor's ingest adapter.
+- 9 source sites updated across `hash_chain.py`, `adapters/ingest.py`, `adapters/embed.py`, `module_agents.py`, `stages.py`. New leaf module `register.py` houses the shape helpers (`read_register`, `text_path_for_ref`, `read_register_meta`, `write_register_meta`) so module_agents and hash_chain can share them without violating import-linter contract 7.
+- `STAGE_ARTEFACTS["ingest"]` cascade anchor moves from `working/register.json` (toolkit-owned) to `working/register_meta.json` (conductor-owned).
+- Hermetic test fixtures across 10 test files updated to produce the toolkit's flat-list shape — prevents drift from re-introducing the bug.
+- New `tests/integration/test_real_toolkit_smoke.py` (gated behind `@pytest.mark.needs_toolkit`) exercises the conductor's ingest adapter against the real toolkit; would have caught the bug on first run. Self-skips when toolkit / TEI / spaCy model not available.
+
 ### Added
 - `VERSIONING.md` documenting the package/schema/producer version policy.
 - `CHANGELOG.md` (this file).
