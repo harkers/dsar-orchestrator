@@ -138,9 +138,8 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
 
     # Mock the redact adapter's subprocess runner so tests don't try to
     # invoke `dsar-redact`. The runner writes `redaction_input.jsonl`
-    # (the real toolkit output) AND `redacted/<ref>.txt` files (a stand-
-    # in for what the not-yet-built bake step inside the export adapter
-    # would produce).
+    # (the real toolkit output). The bake fake (below) is responsible
+    # for writing `redacted/<ref>.txt` files.
     from dsar_orchestrator.adapters import redact as _redact
 
     def _fake_redact_runner(argv, env):
@@ -159,22 +158,27 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
             "\n".join(json.dumps({"ref": r, "spans": [], "reason_code": "pii"}) for r in refs)
             + ("\n" if refs else "")
         )
-        # Stand-in bake output so the export stub can package it.
-        redacted_dir = case_path / "redacted"
-        redacted_dir.mkdir(parents=True, exist_ok=True)
-        for r in refs:
-            (redacted_dir / f"{r}.txt").write_text("[REDACTED]\n")
         return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
 
     # Mock the bake adapter's runner so tests don't invoke `dsar-bake`.
-    # The redact fake already wrote redacted/<ref>.txt; the bake adapter
-    # writes the manifest itself after the runner returns, so the runner
-    # just needs to succeed (returncode=0).
+    # Real dsar-bake reads working/redaction_input.jsonl and applies
+    # redactions, writing under <case>/redacted/. The fake mirrors that:
+    # enumerate refs from register.json and write a stub file per ref.
     from dsar_orchestrator.adapters import bake as _bake
 
     def _fake_bake_runner(argv, env, cwd):
+        case_path = Path(cwd)
+        register_path = case_path / "working" / "register.json"
+        refs = []
+        if register_path.exists():
+            register = json.loads(register_path.read_text())
+            refs = [r["ref"] for r in register.get("refs", [])]
+        redacted_dir = case_path / "redacted"
+        redacted_dir.mkdir(parents=True, exist_ok=True)
+        for r in refs:
+            (redacted_dir / f"{r}.txt").write_text("[REDACTED]\n")
         return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_bake, "_default_runner", lambda: _fake_bake_runner)
