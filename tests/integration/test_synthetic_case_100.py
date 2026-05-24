@@ -66,18 +66,14 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
                 if p.is_file():
                     rel = str(p.relative_to(src))
                     pairs.append((rel, _sf(p)))
-                    refs.append(
-                        {
-                            "ref": f"{case_path.name}-{i + 1:04d}",
-                            "text_path": str(p.relative_to(case_path)),
-                        }
+                    ref = f"{case_path.name}-{i + 1:04d}"
+                    refs.append({"ref": ref, "filename": p.name, "path": str(p)})
+                    (working / f"{ref}.txt").write_text(
+                        p.read_text(encoding="utf-8", errors="replace"),
+                        encoding="utf-8",
                     )
-        register = {
-            "case_no": case_path.name,
-            "refs": refs,
-            "upstream_hash": _hp(pairs),
-        }
-        (working / "register.json").write_text(json.dumps(register))
+        # Per Contract A (issue #8): flat list shape.
+        (working / "register.json").write_text(json.dumps(refs))
         return _subprocess.CompletedProcess(args=argv, returncode=0)
 
     monkeypatch.setattr(_ingest, "_default_runner", lambda: _fake_ingest_runner)
@@ -93,7 +89,7 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
         register_path = working / "register.json"
         if register_path.exists():
             register = json.loads(register_path.read_text())
-            for entry in register.get("refs", []):
+            for entry in register:
                 (working / f"{entry['ref']}_tags.json").write_text(
                     json.dumps({"ref": entry["ref"], "in_scope": True, "entities": []})
                 )
@@ -114,7 +110,7 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
         refs = []
         if register_path.exists():
             register = json.loads(register_path.read_text())
-            refs = [r["ref"] for r in register.get("refs", [])]
+            refs = [r["ref"] for r in register]
         verdicts_path = case_path / "working" / "scope_verdicts.jsonl"
         verdicts_path.write_text(
             "\n".join(json.dumps({"ref": r, "scope_verdict": "present"}) for r in refs)
@@ -138,7 +134,7 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
         refs = []
         if register_path.exists():
             register = json.loads(register_path.read_text())
-            refs = [r["ref"] for r in register.get("refs", [])]
+            refs = [r["ref"] for r in register]
         (working / "redaction_input.jsonl").write_text(
             "\n".join(json.dumps({"ref": r, "spans": [], "reason_code": "pii"}) for r in refs)
             + ("\n" if refs else "")

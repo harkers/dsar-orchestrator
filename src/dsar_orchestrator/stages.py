@@ -149,7 +149,10 @@ def _hash_redacted_dir(cfg: CaseConfig) -> str:
 # ─── the registry ─────────────────────────────────────────────────
 
 STAGE_ARTEFACTS: dict[str, StageArtefact] = {
-    "ingest": StageArtefact("ingest", "ingest", "working/register.json", _hash_source_tree),
+    # Cascade anchor for ingest: the conductor-owned meta sidecar (per
+    # Contract A / issue #8 — register.json is toolkit-owned and doesn't
+    # carry conductor metadata anymore).
+    "ingest": StageArtefact("ingest", "ingest", "working/register_meta.json", _hash_source_tree),
     # Stage 2 parallel branches — each writes its own artefact.
     "embed": StageArtefact("embed", "stage_2_parallel", "working/embeddings.jsonl", _hash_register),
     "detect_2_1_to_2_4": StageArtefact(

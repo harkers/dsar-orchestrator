@@ -95,8 +95,9 @@ def run_for_case(cfg: CaseConfig, *, embedder: EmbedFn | None = None) -> None:
             f"--only ingest"
         )
 
-    register = json.loads(register_path.read_text())
-    refs = register.get("refs", [])
+    from dsar_orchestrator.hash_chain import read_register
+
+    refs = read_register(register_path)
     if not refs:
         raise DSARPipelineError(
             f"case={cfg.case_no}: register has no refs. Confirm source/ "
@@ -124,17 +125,21 @@ def run_for_case(cfg: CaseConfig, *, embedder: EmbedFn | None = None) -> None:
 
 
 def _load_texts(case_path: Path, refs: list[dict]) -> list[str]:
-    """Read raw text per ref in the order given. Bytes are decoded
-    as UTF-8 with replacement to keep one bad byte from killing a
-    100-doc run; the embedding step is a transform, not a validator."""
+    """Read extracted text per ref in the order given. Per Contract A
+    (issue #8) the toolkit writes extracted text to working/<ref>.txt;
+    we derive the path from the entry's ``ref`` field. Bytes are
+    decoded as UTF-8 with replacement to keep one bad byte from killing
+    a 100-doc run; the embedding step is a transform, not a validator."""
+    from dsar_orchestrator.hash_chain import text_path_for_ref
+
     texts: list[str] = []
     for entry in refs:
-        text_rel = entry.get("text_path")
-        if not text_rel:
-            raise DSARPipelineError(f"register entry missing text_path: {entry!r}")
-        text_path = case_path / text_rel
+        ref = entry.get("ref")
+        if not ref:
+            raise DSARPipelineError(f"register entry missing ref: {entry!r}")
+        text_path = text_path_for_ref(case_path, ref)
         if not text_path.exists():
-            raise DSARPipelineError(f"missing text file: {text_path}")
+            raise DSARPipelineError(f"missing text file for ref={ref}: {text_path}")
         texts.append(text_path.read_text(encoding="utf-8", errors="replace"))
     return texts
 

@@ -36,16 +36,14 @@ def test_check_work_writes_audit_row_on_ok(tmp_path: Path, monkeypatch) -> None:
     (case_path / "working").mkdir()
     (case_path / "redacted").mkdir()
     (case_path / "output").mkdir()
-    # Seed a valid register so ingest agent reports ok
+    # Seed a valid register so ingest agent reports ok (Contract A / #8)
     (case_path / "source" / "doc.txt").write_text("x")
+    (case_path / "working" / "doc-0001.txt").write_text("x")
     (case_path / "working" / "register.json").write_text(
-        json.dumps(
-            {
-                "case_no": "300500",
-                "refs": [{"ref": "doc-0001", "text_path": "source/doc.txt"}],
-                "upstream_hash": "h",
-            }
-        )
+        json.dumps([{"ref": "doc-0001", "filename": "doc.txt", "path": "source/doc.txt"}])
+    )
+    (case_path / "working" / "register_meta.json").write_text(
+        json.dumps({"upstream_hash": "h", "schema_version": "1.0"})
     )
 
     _check_module_work(_make_cfg(case_path), "ingest")
@@ -79,14 +77,10 @@ def test_check_work_warning_writes_row_but_does_not_halt(tmp_path: Path, monkeyp
     (case_path / "source").mkdir(parents=True)
     (case_path / "working").mkdir()
     (case_path / "source" / "doc.txt").write_text("x")
-    # register.json without upstream_hash → warning
+    (case_path / "working" / "doc-0001.txt").write_text("x")
+    # register.json present but NO register_meta.json → warning (Contract A / #8)
     (case_path / "working" / "register.json").write_text(
-        json.dumps(
-            {
-                "case_no": "300500",
-                "refs": [{"ref": "doc-0001", "text_path": "source/doc.txt"}],
-            }
-        )
+        json.dumps([{"ref": "doc-0001", "filename": "doc.txt", "path": "source/doc.txt"}])
     )
 
     # Should NOT raise

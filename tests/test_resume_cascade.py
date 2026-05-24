@@ -34,15 +34,21 @@ def _seed_minimum_case(tmp_path: Path, case_no: str = "300100") -> Path:
             src_pairs.append((str(p.relative_to(src)), sha256_file(p)))
     src_hash = hash_pairs(src_pairs)
 
-    register = {
-        "case_no": case_no,
-        "refs": [
-            {"ref": f"{case_no}-0001", "text_path": "source/doc1.txt"},
-            {"ref": f"{case_no}-0002", "text_path": "source/doc2.txt"},
-        ],
-        "upstream_hash": src_hash,
-    }
+    # Per Contract A (issue #8): register is a flat list; conductor
+    # metadata (upstream_hash) lives in working/register_meta.json.
+    ref1 = f"{case_no}-0001"
+    ref2 = f"{case_no}-0002"
+    register = [
+        {"ref": ref1, "filename": "doc1.txt", "path": str(src / "doc1.txt")},
+        {"ref": ref2, "filename": "doc2.txt", "path": str(src / "doc2.txt")},
+    ]
     (working / "register.json").write_text(json.dumps(register))
+    # Extracted text per ref at working/<ref>.txt (toolkit convention)
+    (working / f"{ref1}.txt").write_text("hello world", encoding="utf-8")
+    (working / f"{ref2}.txt").write_text("another doc", encoding="utf-8")
+    (working / "register_meta.json").write_text(
+        json.dumps({"upstream_hash": src_hash, "schema_version": "1.0"})
+    )
 
     config = {
         "case_no": case_no,
@@ -80,8 +86,9 @@ def _write_stale_embeddings(case_path: Path) -> None:
 
 def test_cascade_runs_all_stages_when_no_artefacts(tmp_path: Path) -> None:
     case_path = _seed_minimum_case(tmp_path)
-    # Empty out the register.json so even ingest is stale
-    (case_path / "working" / "register.json").unlink()
+    # Remove the conductor-meta sidecar so even ingest is stale (the
+    # cascade anchor for ingest is register_meta.json post-issue-#8).
+    (case_path / "working" / "register_meta.json").unlink()
 
     cfg = load_case_config(case_path.name, case_root=case_path)
     plan = build_stage_plan(case_path, cfg, None, None, None)

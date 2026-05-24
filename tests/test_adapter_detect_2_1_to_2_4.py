@@ -40,13 +40,11 @@ def _seed_case(tmp_path: Path, *, refs: list[str] | None = None) -> Path:
     register_refs: list[dict] = []
     for r in refs:
         (src / f"{r}.txt").write_text(f"doc {r}")
-        register_refs.append({"ref": r, "text_path": f"source/{r}.txt"})
-    register = {
-        "case_no": case_path.name,
-        "refs": register_refs,
-        "upstream_hash": "fake-register-hash",
-    }
-    (working / "register.json").write_text(json.dumps(register))
+        (working / f"{r}.txt").write_text(f"doc {r}")  # extracted text
+        register_refs.append({"ref": r, "filename": f"{r}.txt", "path": str(src / f"{r}.txt")})
+    # Per Contract A (issue #8): flat list
+    (working / "register.json").write_text(json.dumps(register_refs))
+    (working / "register_meta.json").write_text(json.dumps({"upstream_hash": "fake-register-hash"}))
     return case_path
 
 
@@ -112,12 +110,14 @@ def test_row_carries_tag_payload_and_provenance(tmp_path: Path) -> None:
 def test_upstream_hash_matches_register(tmp_path: Path) -> None:
     case_path = _seed_case(tmp_path, refs=["d1"])
     # Seed the per-ref text file that compute_register_hash needs.
-    register = json.loads((case_path / "working" / "register.json").read_text())
+    # Per Contract A (issue #8): text lives at working/<ref>.txt.
     src = case_path / "source"
     src.mkdir(exist_ok=True)
     (src / "d1.txt").write_text("doc one")
-    register["refs"] = [{"ref": "d1", "text_path": "source/d1.txt"}]
-    (case_path / "working" / "register.json").write_text(json.dumps(register))
+    (case_path / "working" / "d1.txt").write_text("doc one")
+    (case_path / "working" / "register.json").write_text(
+        json.dumps([{"ref": "d1", "filename": "d1.txt", "path": str(src / "d1.txt")}])
+    )
     adapter.run_for_case(
         _make_cfg(case_path),
         runner=_fake_runner_writes_tags(case_path, refs=["d1"]),
