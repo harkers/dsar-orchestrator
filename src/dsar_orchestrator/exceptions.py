@@ -11,7 +11,7 @@ class DSARPipelineError(Exception):
 
 
 class PipelineHalt(DSARPipelineError):
-    """Stage 7 (Phase 6 redact-verify) flagged a failure. Case stays
+    """Stage 8 (Phase 6 verify-pdf) flagged a failure. Case stays
     in working/, never reaches output/. Raised once per case run."""
 
 

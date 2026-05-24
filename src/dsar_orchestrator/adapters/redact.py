@@ -8,9 +8,9 @@ etc.) happens downstream in the ``bake`` stage (handled by the
 export adapter).
 
 This is a deliberate split: the conductor's Stage 6 (redact)
-captures "what to redact" (the input spec); Stage 8 (export) is
-"apply the redactions" + "write final PDFs". Matches the toolkit's
-v2 pipeline shape.
+captures "what to redact" (the input spec); Stage 7 (bake) is
+"apply the redactions" + "write redacted PDFs". Matches the toolkit's
+v5 pipeline shape.
 
 **Retirement contract.** When the toolkit ships a thin Python entry
 ``dsar_pipeline.redact_stage.run_for_case(case_path)``, this adapter

@@ -1,8 +1,8 @@
 """The orchestrator's ``run(case)`` entry point.
 
 Implements the DAG from
-``docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v2.md``
-§ "Full pipeline.run() pseudocode" — 8 stages with ThreadPoolExecutor
+``docs/superpowers/specs/2026-05-24-pipeline-orchestration-design-v5.md``
+§ "Full pipeline.run() pseudocode" — 9 stages with ThreadPoolExecutor
 parallelism on Stages 2 + 3, hash-chain verification at stage
 boundaries, StageBanner audit emission, and PipelineHalt on Phase 6
 verifier failure.
@@ -33,7 +33,7 @@ from dsar_orchestrator.exceptions import (
 # plan. Ordered by data dependency.
 #
 # Two-level addressing:
-#   STAGE_ORDER lists the 8 coarse stages (--from/--through use these
+#   STAGE_ORDER lists the 9 coarse stages (--from/--through use these
 #   because resuming mid-parallel-group is awkward).
 #   SUB_STAGES_BY_STAGE breaks each coarse stage into its constituent
 #   surgical-re-run targets (--only accepts these as well).
@@ -429,7 +429,7 @@ def run(
 ) -> RunReport:
     """Orchestrate a full DSAR case run.
 
-    See ``docs/superpowers/specs/2026-05-22-pipeline-orchestration-design-v2.md``
+    See ``docs/superpowers/specs/2026-05-24-pipeline-orchestration-design-v5.md``
     § "Full pipeline.run() pseudocode" for the authoritative behaviour.
 
     ``force`` disables the resume cascade — every in-scope stage runs

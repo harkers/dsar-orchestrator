@@ -3,7 +3,7 @@
 Drives the full orchestrator + toolkit stubs against a freshly-
 synthesized 100-doc case. Validates:
 
-- The whole 8-stage pipeline completes
+- The whole 9-stage pipeline completes
 - Every stage's module agent reports ok (the stubs produce valid
   artefacts; the agents validate them)
 - Audit logs land where they should
