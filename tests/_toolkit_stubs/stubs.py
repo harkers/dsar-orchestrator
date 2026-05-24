@@ -134,42 +134,52 @@ def make_people_register_stub() -> types.ModuleType:
 # ─── rerank ─────────────────────────────────────────────────────────
 
 
-def make_rerank_core_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_rerank.core")
+def make_tei_rerank_client_stub() -> types.ModuleType:
+    """Stub for `dsar_clients.tei_rerank_client` — the conductor's rerank
+    adapter (Contract B / issue #11) calls this directly. Returns
+    deterministic per-doc scores so resume-cascade tests stay stable."""
+    mod = types.ModuleType("dsar_clients.tei_rerank_client")
 
-    def rerank_case(
-        case_path: Path,
+    class RerankResult:
+        def __init__(self, scores: list[float], *, error: str | None = None) -> None:
+            self.scores = scores
+            self.model_alias = "rerank"
+            self.resolved_model = "BAAI/bge-reranker-large"
+            self.endpoint_url = "http://127.0.0.1:8084"
+            self.model_revision = "stub-rev"
+            self.latency_s = 0.001
+            self.error = error
+
+        def as_audit_fields(self) -> dict[str, str | float]:
+            return {
+                "model_alias": self.model_alias,
+                "resolved_model": self.resolved_model,
+                "endpoint_url": self.endpoint_url,
+                "model_revision": self.model_revision,
+            }
+
+    def rerank_pairs(
         *,
-        mode: str = "shadow",
-        threshold: float = 0.01,
-        top_n: int = 20,
-        sample_rate: float = 0.05,
-    ) -> None:
-        cosine_path = case_path / "working" / "cosine_prefilter.jsonl"
-        from dsar_orchestrator.hash_chain import sha256_text
+        query: str,
+        docs: list[str],
+        timeout_s: int = 30,
+        retries: int = 2,
+        backoff_s: float = 1.0,
+        raw_scores: bool = False,
+        tei_url: str = "http://127.0.0.1:8084",
+    ) -> RerankResult:
+        # Deterministic per-doc score: first byte of UTF-8 as a value
+        # in [0, 1). Avoids randomness in tests; doesn't pretend to be
+        # meaningful rerank scores.
+        scores = [(d.encode("utf-8")[0] if d else 0) / 255.0 for d in docs]
+        return RerankResult(scores=scores)
 
-        cosine_hash = sha256_file(cosine_path)
-        upstream = sha256_text(
-            f"{cosine_hash}\x1f{_read_case_scope(case_path)}\x1f"
-            f"thr={threshold}\x1ftopN={top_n}\x1fmode={mode}"
-        )
-        rows = []
-        cosine_rows = [
-            json.loads(line) for line in cosine_path.read_text().splitlines() if line.strip()
-        ]
-        for r in cosine_rows:
-            rows.append(
-                {
-                    "ref": r["ref"],
-                    "rerank_score": 0.5,
-                    "would_drop": False,
-                    "mode": mode,
-                    "upstream_hash": upstream,
-                }
-            )
-        _write_jsonl(case_path / "working" / "scope_rerank.jsonl", rows)
+    def health(tei_url: str = "http://127.0.0.1:8084") -> bool:
+        return True
 
-    mod.rerank_case = rerank_case
+    mod.RerankResult = RerankResult
+    mod.rerank_pairs = rerank_pairs
+    mod.health = health
     return mod
 
 
@@ -341,7 +351,7 @@ def all_stubs() -> dict[str, types.ModuleType]:
         # directly (adapter pattern per toolkit issue #1), so we stub
         # the HTTP client rather than the not-yet-shipped dsar_embed.core.
         "dsar_clients.tei_embed_client": make_tei_embed_client_stub(),
-        "dsar_rerank.core": make_rerank_core_stub(),
+        "dsar_clients.tei_rerank_client": make_tei_rerank_client_stub(),
         "dsar_pii_classifier.core": make_pii_classifier_stub(),
         "dsar_pipeline.verify_spec": make_verify_spec_stub(),
         "dsar_pipeline.post_bake_verify": make_post_bake_verify_stub(),
