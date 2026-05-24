@@ -31,7 +31,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.export 0.2.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.export 0.3.0"
 SCHEMA_VERSION = "1.0"
 
 # runner(argv, env, cwd) -> CompletedProcess
