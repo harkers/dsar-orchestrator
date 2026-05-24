@@ -173,8 +173,9 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
         register_path = case_path / "working" / "register.json"
         refs = []
         if register_path.exists():
+            # Per Contract A (issue #8): register is a flat list.
             register = json.loads(register_path.read_text())
-            refs = [r["ref"] for r in register.get("refs", [])]
+            refs = [r["ref"] for r in register]
         redacted_dir = case_path / "redacted"
         redacted_dir.mkdir(parents=True, exist_ok=True)
         for r in refs:
