@@ -141,6 +141,18 @@ def _hash_bake_inputs(cfg: CaseConfig) -> str:
     return sha256_file(p) if p.exists() else ""
 
 
+def _hash_verify_spec_inputs(cfg: CaseConfig) -> str:
+    """Upstream for ``verify_spec``: the redaction plan + the upstream
+    PII evidence (what verify_spec reads). When either input changes,
+    the verifier must re-run."""
+    working = cfg.case_path / "working"
+    plan = working / "redaction_input.jsonl"
+    evidence = working / "pii_findings.jsonl"
+    plan_hash = sha256_file(plan) if plan.exists() else ""
+    evidence_hash = sha256_file(evidence) if evidence.exists() else ""
+    return sha256_text(f"{plan_hash}\x1f{evidence_hash}")
+
+
 def _hash_redacted_dir(cfg: CaseConfig) -> str:
     """Upstream for ``redact_verify``: every file under ``<case>/redacted/``."""
     redacted_dir = cfg.case_path / "redacted"
@@ -216,6 +228,12 @@ STAGE_ARTEFACTS: dict[str, StageArtefact] = {
         "redact",
         "working/redact_complete.json",
         _hash_redact_inputs,
+    ),
+    "verify_spec": StageArtefact(
+        "verify_spec",
+        "verify_spec",
+        "working/verify_spec_findings.jsonl",  # toolkit-owned
+        _hash_verify_spec_inputs,
     ),
     "bake": StageArtefact(
         "bake",
