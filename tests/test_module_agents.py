@@ -25,6 +25,7 @@ from dsar_orchestrator.module_agents import (
     check_pii_classify,
     check_redact,
     check_verify_pdf,
+    check_verify_spec,
     check_rerank,
     check_scope_classify,
     check_scope_prefilter,
@@ -488,6 +489,55 @@ def test_redact_happy(tmp_path: Path) -> None:
     )
     result = check_redact(_make_cfg(case_path))
     assert result.ok is True
+
+
+# ─── verify_spec ────────────────────────────────────────────────────
+
+
+def test_verify_spec_critical_when_file_missing(tmp_path: Path) -> None:
+    """Missing audit file → toolkit didn't run → critical."""
+    case_path = _make_case(tmp_path)
+    result = check_verify_spec(_make_cfg(case_path))
+    assert result.ok is False
+    assert result.severity == "critical"
+
+
+def test_verify_spec_ok_when_file_empty(tmp_path: Path) -> None:
+    """Empty file (toolkit ran with 0 failures) → ok.
+
+    Toolkit's verify_for_conductor always writes the audit log even
+    when there are no failures (toolkit#125). The conductor's agent
+    must distinguish 'missing' (didn't run) from 'empty' (ran clean)."""
+    case_path = _make_case(tmp_path)
+    (case_path / "working" / "verify_spec_findings.jsonl").write_text("")
+    result = check_verify_spec(_make_cfg(case_path))
+    assert result.ok is True
+    assert result.severity == "info"
+
+
+def test_verify_spec_ok_when_only_non_high_findings(tmp_path: Path) -> None:
+    case_path = _make_case(tmp_path)
+    _jsonl(
+        case_path / "working" / "verify_spec_findings.jsonl",
+        [
+            {"check": "c2", "ref": "D001", "severity": "warning", "issue": "minor"},
+        ],
+    )
+    result = check_verify_spec(_make_cfg(case_path))
+    assert result.ok is True
+
+
+def test_verify_spec_critical_on_high_severity(tmp_path: Path) -> None:
+    case_path = _make_case(tmp_path)
+    _jsonl(
+        case_path / "working" / "verify_spec_findings.jsonl",
+        [
+            {"check": "c1", "ref": "D001", "severity": "high", "issue": "unmatched"},
+        ],
+    )
+    result = check_verify_spec(_make_cfg(case_path))
+    assert result.ok is False
+    assert result.severity == "critical"
 
 
 # ─── verify_pdf ─────────────────────────────────────────────────────

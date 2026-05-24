@@ -6,6 +6,15 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-24
+
+### Fixed — check_verify_spec distinguishes missing from empty
+
+- `module_agents.check_verify_spec` previously treated both "audit file missing" and "audit file empty" as critical halts. The toolkit's `verify_for_conductor` always writes the audit log even when there are 0 failures (so empty file = "ran cleanly"). Conductor now: MISSING file → critical (toolkit didn't run); EMPTY file → ok (toolkit ran with 0 failures); HIGH severity rows → critical (unhandled findings); non-HIGH rows only → ok. Mirror of Contract B #12's smart-empty pii_classify pattern.
+- 4 new tests in `tests/test_module_agents.py`: missing-critical, empty-ok, non-high-ok, high-critical.
+- Hermetic count: 303 passing (was 299).
+- Coordinates with: harkers/dsar-toolkit#125 (v0.3.1) which paired this side of the fence.
+
 ## [0.4.0] - 2026-05-24
 
 ### Changed — Contract B (issues #10/#11/#12)

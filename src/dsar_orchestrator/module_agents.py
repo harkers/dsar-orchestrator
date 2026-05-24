@@ -502,17 +502,28 @@ def check_bake(cfg: CaseConfig) -> ModuleCheckResult:
 def check_verify_spec(cfg: CaseConfig) -> ModuleCheckResult:
     """verify_spec validator — always-on, no enable flag.
 
-    Same shape as check_verify_pdf: read the toolkit-written audit
-    JSONL, count severity-high rows, raise critical if any leaked
-    through without a pipeline halt.
+    Read the toolkit-written audit JSONL, count severity-high rows,
+    raise critical if any leaked through without a pipeline halt.
+
+    File semantics (cross-test follow-up after toolkit#125):
+      - File MISSING → critical (toolkit's verify_spec didn't even run)
+      - File EMPTY (0 rows) → ok (toolkit ran with zero failures = clean)
+      - File with severity=high rows → critical (unhandled findings)
+      - File with non-high rows only → ok (informational entries)
+
+    The toolkit's verify_for_conductor always writes the audit log,
+    even when failures is empty. So an empty file means "toolkit ran
+    successfully with no failures", not "stage was skipped".
     """
     audit_path = cfg.case_path / "working" / "verify_spec_findings.jsonl"
-    rows = _load_jsonl(audit_path)
-    if not rows:
+    if not audit_path.exists():
         return _critical(
-            [f"verify_spec_findings.jsonl missing or empty at {audit_path}"],
+            [f"verify_spec_findings.jsonl missing at {audit_path}"],
             _rerun_hint("verify_spec", cfg.case_no),
         )
+    rows = _load_jsonl(audit_path)
+    if not rows:
+        return _ok(["verify_spec_findings.jsonl empty: toolkit ran with 0 failures"])
     high_findings = [row for row in rows if row.get("severity") == "high"]
     if high_findings:
         return _critical(
