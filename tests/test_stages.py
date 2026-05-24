@@ -26,8 +26,10 @@ def _make_cfg(case_no: str, case_path: Path) -> CaseConfig:
 
 
 def _seed_ingest(case_path: Path) -> tuple[Path, str]:
-    """Write a minimal source/ + working/register.json. Returns
-    (register_path, upstream_hash of source tree)."""
+    """Write a minimal source/ + working/register.json + working/<ref>.txt
+    + working/register_meta.json (matching real toolkit + conductor
+    Contract A shape — issue #8). Returns (register_path, upstream_hash
+    of source tree)."""
     src = case_path / "source"
     src.mkdir(parents=True, exist_ok=True)
     (src / "doc1.txt").write_text("hello world")
@@ -36,24 +38,30 @@ def _seed_ingest(case_path: Path) -> tuple[Path, str]:
     working = case_path / "working"
     working.mkdir(parents=True, exist_ok=True)
 
-    # Synthesize the register.json that ingest would produce.
-    register = {
-        "case_no": case_path.name,
-        "refs": [
-            {"ref": case_path.name + "-0001", "text_path": "source/doc1.txt"},
-            {"ref": case_path.name + "-0002", "text_path": "source/doc2.txt"},
-        ],
-    }
+    # Real toolkit shape: register.json is a flat list of file-record dicts.
+    # Each entry has `ref` and (typically) `path`/`filename`/`hash`/...
+    ref1 = case_path.name + "-0001"
+    ref2 = case_path.name + "-0002"
+    register = [
+        {"ref": ref1, "path": str(src / "doc1.txt"), "filename": "doc1.txt"},
+        {"ref": ref2, "path": str(src / "doc2.txt"), "filename": "doc2.txt"},
+    ]
     register_path = working / "register.json"
-    # The ingest stage's upstream is the source tree, so we record that
-    # hash on the register.
+    register_path.write_text(json.dumps(register))
+
+    # Toolkit writes extracted text per ref at working/<ref>.txt — mirror it.
+    (working / f"{ref1}.txt").write_text("hello world")
+    (working / f"{ref2}.txt").write_text("another doc")
+
+    # Conductor-owned metadata: upstream_hash of source tree.
     src_pairs = []
     for p in sorted(src.rglob("*")):
         if p.is_file():
             src_pairs.append((str(p.relative_to(src)), sha256_file(p)))
     upstream = hash_pairs(src_pairs)
-    register["upstream_hash"] = upstream
-    register_path.write_text(json.dumps(register))
+    (working / "register_meta.json").write_text(
+        json.dumps({"upstream_hash": upstream, "schema_version": "1.0"})
+    )
     return register_path, upstream
 
 
