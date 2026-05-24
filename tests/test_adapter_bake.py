@@ -166,3 +166,45 @@ def test_synthetic_case_no_tags_files_is_noop(tmp_path: Path) -> None:
 
     # Just needs to not raise.
     adapter.run_for_case(_make_synth_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+
+
+def test_synthetic_case_clears_register_notes(tmp_path: Path) -> None:
+    """Issue #18 round 2: legacy redact_all checks register.json's
+    `notes` field for 'flagged for review' too, not just the per-entity
+    redact field. Synthetic helper must clear both."""
+    case_path = tmp_path / "900004"
+    working = case_path / "working"
+    working.mkdir(parents=True)
+    # Per Contract A: register is a flat list.
+    register = [
+        {"ref": "D001", "filename": "D001.txt", "notes": "6 items flagged for review"},
+        {"ref": "D002", "filename": "D002.txt", "notes": ""},
+        {"ref": "D003", "filename": "D003.txt", "notes": "1 items flagged for review"},
+    ]
+    (working / "register.json").write_text(json.dumps(register))
+    (working / "redaction_input.jsonl").write_text("")
+    (case_path / "redacted").mkdir()
+    (case_path / "redacted" / "doc.pdf").write_text("baked")
+
+    adapter.run_for_case(_make_synth_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+
+    rewritten = json.loads((working / "register.json").read_text())
+    assert all(d["notes"] == "" for d in rewritten)
+
+
+def test_non_synthetic_case_leaves_register_notes_intact(tmp_path: Path) -> None:
+    """Real operator cases (cfg.synthetic=False) leave register.json
+    notes intact — operator workflow signal."""
+    case_path = tmp_path / "900005"
+    working = case_path / "working"
+    working.mkdir(parents=True)
+    register = [{"ref": "D001", "filename": "D001.txt", "notes": "6 items flagged for review"}]
+    (working / "register.json").write_text(json.dumps(register))
+    (working / "redaction_input.jsonl").write_text("")
+    (case_path / "redacted").mkdir()
+    (case_path / "redacted" / "doc.pdf").write_text("baked")
+
+    adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+
+    unchanged = json.loads((working / "register.json").read_text())
+    assert unchanged[0]["notes"] == "6 items flagged for review"
