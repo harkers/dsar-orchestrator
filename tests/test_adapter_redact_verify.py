@@ -114,6 +114,7 @@ def test_handles_verdict_missing_optional_fields(tmp_path: Path) -> None:
 
     class MinimalFailingVerdict:
         all_passed = False
+        audit_log_path = case_path / "working" / "post_bake_findings.jsonl"
 
     with pytest.raises(PipelineHalt, match="redact-verify failed"):
         adapter.run_for_case(_make_cfg(case_path), verify_fn=lambda _: MinimalFailingVerdict())
