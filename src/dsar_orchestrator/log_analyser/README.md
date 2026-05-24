@@ -8,8 +8,8 @@ No external API calls.
 
 1. Reads every audit log under `~/.dsar-audit/<case>/`
    (`pipeline.jsonl`, `llm_calls.jsonl`, `scope_rerank.jsonl`,
-   `pii_collection.jsonl`, `scope_recheck.jsonl`,
-   `redact_verify.jsonl`).
+   `pii_collection.jsonl`, `scope_recheck.jsonl`) plus
+   `working/post_bake_findings.jsonl` from the case directory.
 2. Computes deterministic stats (stage durations, halt reasons, LLM
    call counts, disputed-doc rates, verify failures).
 3. Asks a local LLM via mlx-broker to surface issues — categories

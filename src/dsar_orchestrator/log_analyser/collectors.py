@@ -18,8 +18,11 @@ KNOWN_LOGS = (
     "scope_rerank.jsonl",
     "pii_collection.jsonl",
     "scope_recheck.jsonl",
-    "redact_verify.jsonl",
 )
+
+# Logs written by the toolkit into <case>/working/ (not under ~/.dsar-audit).
+# Collected from the case working directory, not the audit root.
+WORKING_KNOWN_LOGS = ("post_bake_findings.jsonl",)
 
 
 def _read_jsonl_safely(path: Path, max_rows: int = 5000) -> list[dict[str, Any]]:
@@ -42,16 +45,33 @@ def _read_jsonl_safely(path: Path, max_rows: int = 5000) -> list[dict[str, Any]]
     return rows
 
 
-def collect_case_logs(case_no: str, audit_root: Path | None = None) -> dict[str, list[dict]]:
+def collect_case_logs(
+    case_no: str,
+    audit_root: Path | None = None,
+    case_root: Path | None = None,
+) -> dict[str, list[dict]]:
     """Return a dict ``{log_filename: [rows...]}`` for every known
-    audit log present under ``~/.dsar-audit/<case_no>/``.
+    audit log present under ``~/.dsar-audit/<case_no>/`` plus working-
+    directory logs (e.g. ``working/post_bake_findings.jsonl``) from
+    ``<case_root>/<case_no>/``.
 
     Missing logs are returned as empty lists so downstream code can
     iterate without per-file existence checks.
     """
     base = audit_root or (Path.home() / ".dsar-audit")
     case_dir = base / case_no
-    return {name: _read_jsonl_safely(case_dir / name) for name in KNOWN_LOGS}
+    result = {name: _read_jsonl_safely(case_dir / name) for name in KNOWN_LOGS}
+
+    # Collect working-dir logs (v5.0+: written by the toolkit into
+    # <case>/working/, not the audit root).
+    if case_root is not None:
+        working_dir = Path(case_root) / case_no / "working"
+    else:
+        working_dir = Path.home() / "dsars" / "cases" / case_no / "working"
+    for name in WORKING_KNOWN_LOGS:
+        result[name] = _read_jsonl_safely(working_dir / name)
+
+    return result
 
 
 def summarise_for_prompt(
@@ -68,7 +88,7 @@ def summarise_for_prompt(
     parts.append(f"# Audit logs for case {case_no}")
     parts.append("")
 
-    for name in KNOWN_LOGS:
+    for name in (*KNOWN_LOGS, *WORKING_KNOWN_LOGS):
         rows = logs.get(name, [])
         parts.append(f"## {name}")
         parts.append("")
@@ -127,6 +147,6 @@ def basic_stats(logs: dict[str, list[dict]]) -> dict[str, Any]:
             1 for r in logs.get("scope_recheck.jsonl", []) if r.get("verdict") == "disputed"
         ),
         "verify_failed_count": sum(
-            1 for r in logs.get("redact_verify.jsonl", []) if r.get("passed") is False
+            1 for r in logs.get("post_bake_findings.jsonl", []) if r.get("severity") == "high"
         ),
     }

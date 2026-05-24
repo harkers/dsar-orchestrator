@@ -1,4 +1,4 @@
-"""Conductor-owned export adapter — Stage 8.
+"""Conductor-owned export adapter — Stage 9.
 
 Bridges to ``dsar_pipeline.export`` module. Bake is a separate
 preceding stage (Stage 7 / ``adapters.bake``); by the time this

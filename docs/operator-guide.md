@@ -7,7 +7,7 @@ failures, and use the analyser to push back on suspect runs.
 
 | Command | What it does |
 |---|---|
-| `dsar-conductor --case <no>` | Run (or resume) the full 8-stage pipeline for a case |
+| `dsar-conductor --case <no>` | Run (or resume) the full 9-stage pipeline for a case |
 | `dsar-analyse-logs --case <no>` | Ask the local LLM (via mlx-broker) to review the case's audit logs and surface issues |
 
 Both are read-only by default with the right flags (`--check`,
@@ -209,7 +209,7 @@ cat ~/dsars/cases/300100/working/embeddings.jsonl | head -1 | jq .upstream_hash
 | `~/.dsar-audit/<no>/analysis.jsonl` | Log analyser findings (one row per finding) |
 | `~/.dsar-audit/<no>/analysis.md` | Log analyser findings (human-readable) |
 | `~/.dsar-audit/<no>/analysis-block.flag` | Present iff analyser found criticals |
-| `~/.dsar-audit/<no>/redact_verify.jsonl` | Phase 6 verifier outcomes (per-doc) |
+| `~/dsars/cases/<no>/working/post_bake_findings.jsonl` | Phase 6 verifier outcomes (per-finding, severity-tagged) |
 | `~/.dsar-audit/<no>/llm_calls.jsonl` | Toolkit-side LLM call log |
 
 All under `~/.dsar-audit/` are mode 0700 (operator-only).
@@ -242,7 +242,7 @@ Override files (any of these → file content wins over env vars):
 | `Required toolkit module '<x>' is not installed` | `pip install -e ~/projects/dsar-toolkit/` |
 | `case=<n> is under an analyser block` | See "When the analyser blocks you" above |
 | `mlx-broker at http://127.0.0.1:8090 unreachable` | `launchctl print gui/$(id -u)/com.mlx-broker` then `launchctl kickstart` if needed |
-| `case=<n> redact-verify failed: ...` | Phase 6 caught leakage; inspect `redact_verify.jsonl`, fix redact, re-run from redact |
+| `case=<n> redact-verify failed: ...` | Phase 6 caught leakage; inspect `working/post_bake_findings.jsonl` for high-severity rows, fix redact, re-run from redact |
 | `case=<n>: module agent for <stage> flagged a critical issue` | Toolkit agent rejected the stage's output; recommendation is in the error + audit log |
 | `Upstream changed since <path> was written` | Hash chain detected upstream drift; re-run the upstream stage or use `--force` |
 
