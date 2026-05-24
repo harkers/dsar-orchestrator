@@ -133,6 +133,14 @@ def _hash_redact_inputs(cfg: CaseConfig) -> str:
     )
 
 
+def _hash_bake_inputs(cfg: CaseConfig) -> str:
+    """Upstream for ``bake``: the redaction plan written by the redact
+    stage (``working/redaction_input.jsonl``). Matches the hash the
+    bake adapter records in ``bake_manifest.json``."""
+    p = cfg.case_path / "working" / "redaction_input.jsonl"
+    return sha256_file(p) if p.exists() else ""
+
+
 def _hash_redacted_dir(cfg: CaseConfig) -> str:
     """Upstream for ``redact_verify``: every file under ``<case>/redacted/``."""
     redacted_dir = cfg.case_path / "redacted"
@@ -208,6 +216,12 @@ STAGE_ARTEFACTS: dict[str, StageArtefact] = {
         "redact",
         "working/redact_complete.json",
         _hash_redact_inputs,
+    ),
+    "bake": StageArtefact(
+        "bake",
+        "bake",
+        "working/redact_v4/bake_manifest.json",
+        _hash_bake_inputs,
     ),
     "redact_verify": StageArtefact(
         "redact_verify",

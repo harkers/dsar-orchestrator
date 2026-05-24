@@ -460,6 +460,36 @@ def check_redact(cfg: CaseConfig) -> ModuleCheckResult:
     )
 
 
+# ─── bake ───────────────────────────────────────────────────────────
+
+
+def check_bake(cfg: CaseConfig) -> ModuleCheckResult:
+    """Bake validator: every ref in the redaction plan must have a
+    corresponding file under `redacted/`."""
+    redacted_dir = cfg.case_path / "redacted"
+    plan_path = cfg.case_path / "working" / "redaction_input.jsonl"
+
+    if not plan_path.exists():
+        return _critical(
+            [f"redaction_input.jsonl missing at {plan_path}"],
+            _rerun_hint("redact", cfg.case_no),
+        )
+    if not redacted_dir.exists():
+        return _critical(
+            [f"redacted/ dir missing at {redacted_dir}"],
+            _rerun_hint("bake", cfg.case_no),
+        )
+
+    files = list(redacted_dir.rglob("*"))
+    if not files:
+        return _critical(
+            [f"redacted/ is empty at {redacted_dir}"],
+            _rerun_hint("bake", cfg.case_no),
+        )
+
+    return _ok([f"bake: redacted/ contains {len(files)} entries"])
+
+
 # ─── redact_verify ──────────────────────────────────────────────────
 
 
@@ -551,6 +581,7 @@ CHECKERS: dict[str, callable] = {
     "scope_classify": check_scope_classify,
     "pii_classify": check_pii_classify,
     "redact": check_redact,
+    "bake": check_bake,
     "redact_verify": check_redact_verify,
     "export": check_export,
 }

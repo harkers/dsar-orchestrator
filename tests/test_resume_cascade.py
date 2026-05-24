@@ -205,6 +205,7 @@ def test_skip_fresh_artefacts_false_includes_everything(tmp_path: Path) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "bake",
         "redact_verify",
         "export",
     ]

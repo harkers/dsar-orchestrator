@@ -147,17 +147,26 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
 
+    # Mock the bake adapter's runner; same shape as in
+    # tests/integration/test_full_pipeline_with_stubs.py.
+    from dsar_orchestrator.adapters import bake as _bake
+
+    def _fake_bake_runner(argv, env, cwd):
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_bake, "_default_runner", lambda: _fake_bake_runner)
+
     # Mock the export adapter's runner; same shape as in
     # tests/integration/test_full_pipeline_with_stubs.py.
     from dsar_orchestrator.adapters import export as _export
 
     def _fake_export_runner(argv, env, cwd):
-        if argv[0] != "dsar-bake":
-            output = Path(cwd) / "output"
-            output.mkdir(parents=True, exist_ok=True)
-            redacted = Path(cwd) / "redacted"
-            if redacted.exists():
-                for p in redacted.iterdir():
+        output = Path(cwd) / "output"
+        output.mkdir(parents=True, exist_ok=True)
+        redacted = Path(cwd) / "redacted"
+        if redacted.exists():
+            for p in redacted.iterdir():
+                if p.is_file():
                     (output / (p.stem + ".pdf")).write_text(p.read_text())
         return _subprocess.CompletedProcess(args=argv, returncode=0)
 
@@ -189,7 +198,7 @@ def test_synthesize_then_pipeline_full_run(synthetic_100_case) -> None:
     # Drive the orchestrator end-to-end
     report = run(case.case_no, case_root=case.case_path)
 
-    # All 8 coarse stages ran
+    # All 9 coarse stages ran
     for stage in (
         "ingest",
         "stage_2_parallel",
@@ -197,6 +206,7 @@ def test_synthesize_then_pipeline_full_run(synthetic_100_case) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "bake",
         "redact_verify",
         "export",
     ):
@@ -216,6 +226,7 @@ def test_synthesize_then_pipeline_full_run(synthetic_100_case) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "bake",
         "redact_verify",
         "export",
     } <= stages_with_end
@@ -231,7 +242,7 @@ def test_synthetic_case_all_module_agents_pass(synthetic_100_case) -> None:
     checks = _read_audit_jsonl(case.case_no, "module_checks.jsonl")
     # Every sub-stage that ran should have a check row
     sub_stages_with_rows = {row["sub_stage"] for row in checks}
-    # All 12 stage agents should fire (some are skipped via cfg flags
+    # All 13 stage agents should fire (some are skipped via cfg flags
     # but those still record an info-class row via the agent's own
     # short-circuit)
     expected = {
@@ -245,6 +256,7 @@ def test_synthetic_case_all_module_agents_pass(synthetic_100_case) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "bake",
         "redact_verify",
         "export",
     }
@@ -264,7 +276,7 @@ def test_synthetic_case_resume_skips_everything_on_second_run(
     every coarse stage."""
     case = synthetic_100_case
     first = run(case.case_no, case_root=case.case_path)
-    assert len(first.stages_run) == 8
+    assert len(first.stages_run) == 9
 
     second = run(case.case_no, case_root=case.case_path)
     # Everything is fresh; nothing actually re-ran

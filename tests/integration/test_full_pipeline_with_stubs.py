@@ -168,19 +168,29 @@ def with_toolkit_stubs(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(_redact, "_default_runner", lambda: _fake_redact_runner)
 
+    # Mock the bake adapter's runner so tests don't invoke `dsar-bake`.
+    # The redact fake already wrote redacted/<ref>.txt; the bake adapter
+    # writes the manifest itself after the runner returns, so the runner
+    # just needs to succeed (returncode=0).
+    from dsar_orchestrator.adapters import bake as _bake
+
+    def _fake_bake_runner(argv, env, cwd):
+        return _subprocess.CompletedProcess(args=argv, returncode=0)
+
+    monkeypatch.setattr(_bake, "_default_runner", lambda: _fake_bake_runner)
+
     # Mock the export adapter's runner so tests don't actually shell
-    # out to dsar-bake / python -m dsar_pipeline.export. The fake
-    # treats bake as a no-op (the redact fake already wrote
-    # redacted/<ref>.txt) and produces a minimal output/ tree.
+    # out to python -m dsar_pipeline.export. The fake produces a minimal
+    # output/ tree from redacted/ (bake already ran as its own stage).
     from dsar_orchestrator.adapters import export as _export
 
     def _fake_export_runner(argv, env, cwd):
-        if argv[0] != "dsar-bake":
-            output = Path(cwd) / "output"
-            output.mkdir(parents=True, exist_ok=True)
-            redacted = Path(cwd) / "redacted"
-            if redacted.exists():
-                for p in redacted.iterdir():
+        output = Path(cwd) / "output"
+        output.mkdir(parents=True, exist_ok=True)
+        redacted = Path(cwd) / "redacted"
+        if redacted.exists():
+            for p in redacted.iterdir():
+                if p.is_file():
                     (output / (p.stem + ".pdf")).write_text(p.read_text())
         return _subprocess.CompletedProcess(args=argv, returncode=0)
 
@@ -223,19 +233,20 @@ def staged_case(with_toolkit_stubs):
 
 
 def test_full_pipeline_completes_with_stubs(staged_case: Path) -> None:
-    """Run the entire 8-stage pipeline against stub modules; assert all
+    """Run the entire 9-stage pipeline against stub modules; assert all
     stages execute + write their artefacts + the audit log is
     populated."""
     case_no = staged_case.name
     report = run(case_no, case_root=staged_case)
 
-    # All 8 stages should have run
+    # All 9 stages should have run
     assert "ingest" in report.stages_run
     assert "stage_2_parallel" in report.stages_run
     assert "stage_3_parallel" in report.stages_run
     assert "scope_classify" in report.stages_run
     assert "pii_classify" in report.stages_run
     assert "redact" in report.stages_run
+    assert "bake" in report.stages_run
     assert "redact_verify" in report.stages_run
     assert "export" in report.stages_run
 
@@ -272,6 +283,7 @@ def test_full_pipeline_emits_audit_log(staged_case: Path) -> None:
         "scope_classify",
         "pii_classify",
         "redact",
+        "bake",
         "redact_verify",
         "export",
     ):

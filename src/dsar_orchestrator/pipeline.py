@@ -44,6 +44,7 @@ STAGE_ORDER: tuple[str, ...] = (
     "scope_classify",
     "pii_classify",
     "redact",
+    "bake",  # NEW in v5.0
     "redact_verify",
     "export",
 )
@@ -57,6 +58,7 @@ SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "scope_classify": ("scope_classify",),
     "pii_classify": ("pii_classify",),
     "redact": ("redact",),
+    "bake": ("bake",),  # NEW in v5.0
     "redact_verify": ("redact_verify",),
     "export": ("export",),
 }
@@ -378,6 +380,16 @@ def _run_redact(cfg: CaseConfig) -> None:
     _check_module_work(cfg, "redact")
 
 
+def _run_bake(cfg: CaseConfig) -> None:
+    # ADAPTER for bake (retires when toolkit ships
+    # `dsar_pipeline.bake.run_for_case(case_path)` — not yet filed).
+    # Extracted from the export adapter in v5.0 (rollout B phase 1).
+    from dsar_orchestrator.adapters import bake as bake_adapter
+
+    bake_adapter.run_for_case(cfg)
+    _check_module_work(cfg, "bake")
+
+
 def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
     """Returns None on success; raises PipelineHalt on any verifier failure."""
     # ADAPTER for redact_verify (retires when toolkit ships
@@ -500,12 +512,17 @@ def run(
             with StageBanner(audit, "redact"):
                 _run_redact(cfg)
 
-        # Stage 7 — redact-verify (Phase 6, halt-on-fail)
+        # Stage 7 — bake (v5.0; was inside export adapter)
+        if plan.includes("bake"):
+            with StageBanner(audit, "bake"):
+                _run_bake(cfg)
+
+        # Stage 8 — redact-verify (Phase 6, halt-on-fail)
         if plan.includes("redact_verify"):
             with StageBanner(audit, "redact_verify"):
                 _run_redact_verify(cfg)
 
-        # Stage 8 — export
+        # Stage 9 — export
         if plan.includes("export"):
             with StageBanner(audit, "export"):
                 _run_export(cfg)

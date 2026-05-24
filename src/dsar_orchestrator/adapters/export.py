@@ -1,24 +1,21 @@
 """Conductor-owned export adapter — Stage 8.
 
-Bridges to the toolkit's ``dsar-bake`` CLI + ``dsar_pipeline.export``
-module. Stage 8 covers two toolkit steps in sequence:
+Bridges to ``dsar_pipeline.export`` module. Bake is a separate
+preceding stage (Stage 7 / ``adapters.bake``); by the time this
+adapter runs, ``<case>/redacted/`` already exists.
 
-1. **Bake** — ``dsar-bake --case <id>``. Reads
-   ``working/redaction_input.jsonl`` (produced by the conductor's
-   redact stage) + applies redactions to the source files, writing
-   to ``<case>/redacted/``.
-2. **Export** — ``python -m dsar_pipeline.export`` run with cwd=case
-   dir. Converts ``redacted/`` to final PDF/A deliverables in
-   ``<case>/output/``, plus the master manifest.md.
+Runs ``python -m dsar_pipeline.export`` with cwd=case dir.  Converts
+``redacted/`` to final PDF/A deliverables in ``<case>/output/``, plus
+the toolkit's ``manifest.md`` summary file.
 
 The adapter then writes its own ``output/manifest.json`` (cascade
 anchor — distinct from the toolkit's ``manifest.md`` summary file)
 with ``upstream_hash`` over the redacted tree, so resumes correctly
 invalidate when redacted output changes.
 
-**Retirement contract.** When the toolkit ships a single thin Python
-entry ``dsar_pipeline.export.run_for_case(case_path)`` that drives
-bake + export + writes a JSON manifest, this adapter retires.
+**Retirement contract.** When the toolkit ships a thin Python entry
+``dsar_pipeline.export.run_for_case(case_path)`` that drives export +
+writes a JSON manifest, this adapter retires.
 """
 
 from __future__ import annotations
@@ -34,9 +31,8 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.export 0.1.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.export 0.2.0"
 SCHEMA_VERSION = "1.0"
-DEFAULT_BAKE_CLI = "dsar-bake"
 
 # runner(argv, env, cwd) -> CompletedProcess
 RunnerFn = Callable[[list[str], dict[str, str], Path], subprocess.CompletedProcess]
@@ -61,22 +57,13 @@ def run_for_case(
     cfg: CaseConfig,
     *,
     runner: RunnerFn | None = None,
-    bake_cli: str = DEFAULT_BAKE_CLI,
 ) -> None:
-    """Drive bake then export; write the cascade anchor manifest."""
+    """Run the export module; write the cascade anchor manifest."""
     if runner is None:
         runner = _default_runner()
 
     env = dict(os.environ)
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
-
-    bake_argv = [bake_cli, "--case", cfg.case_no]
-    bake_result = runner(bake_argv, env, cfg.case_path)
-    if bake_result.returncode != 0:
-        stderr = (bake_result.stderr or "")[-2000:]
-        raise DSARPipelineError(
-            f"case={cfg.case_no}: bake CLI exited {bake_result.returncode}. stderr tail:\n{stderr}"
-        )
 
     export_argv = [sys.executable, "-m", "dsar_pipeline.export"]
     export_result = runner(export_argv, env, cfg.case_path)
