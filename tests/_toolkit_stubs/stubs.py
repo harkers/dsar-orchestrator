@@ -215,32 +215,10 @@ def make_pii_classifier_stub() -> types.ModuleType:
     return mod
 
 
-# ─── pii_discovery ──────────────────────────────────────────────────
-
-
-def make_pii_discovery_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_pii_discovery.core")
-
-    def discover_entities(case_path: Path) -> None:
-        from dsar_orchestrator.hash_chain import read_register, sha256_text
-
-        register_path = case_path / "working" / "register.json"
-        register_hash = compute_register_hash(register_path)
-        upstream = sha256_text(f"{register_hash}\x1f{_read_case_scope(case_path)}")
-        # Per Contract A (issue #8): register is a flat list.
-        rows = []
-        for entry in read_register(register_path):
-            rows.append(
-                {
-                    "ref": entry["ref"],
-                    "entities": [],
-                    "upstream_hash": upstream,
-                }
-            )
-        _write_jsonl(case_path / "working" / "pii_discovery.jsonl", rows)
-
-    mod.discover_entities = discover_entities
-    return mod
+# NB: pii_discovery removed in Contract B / issue #10 (toolkit folded
+# the discovery functionality into dsar_pii_classifier.core.discover_case
+# which the pii_classify stage already calls; the conductor was duplicate
+# work pointed at a fictional dsar_pii_discovery.core).
 
 
 # NB: There is no `make_redact_stub` or `make_export_stub` anymore.
@@ -365,7 +343,6 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_clients.tei_embed_client": make_tei_embed_client_stub(),
         "dsar_rerank.core": make_rerank_core_stub(),
         "dsar_pii_classifier.core": make_pii_classifier_stub(),
-        "dsar_pii_discovery.core": make_pii_discovery_stub(),
         "dsar_pipeline.verify_spec": make_verify_spec_stub(),
         "dsar_pipeline.post_bake_verify": make_post_bake_verify_stub(),
     }

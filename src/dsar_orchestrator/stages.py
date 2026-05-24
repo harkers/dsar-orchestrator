@@ -67,16 +67,9 @@ def _hash_source_tree(cfg: CaseConfig) -> str:
 
 
 def _hash_register(cfg: CaseConfig) -> str:
-    """Upstream for ``embed`` + ``detect_2_1_to_2_4`` + ``pii_discovery``:
-    the register + raw text per ref."""
+    """Upstream for ``embed`` + ``detect_2_1_to_2_4``: the register +
+    raw text per ref."""
     return compute_register_hash(cfg.case_path / "working" / "register.json")
-
-
-def _hash_register_plus_scope(cfg: CaseConfig) -> str:
-    """Upstream that combines register hash + the case scope string +
-    the discovery model revision (when known)."""
-    register = _hash_register(cfg)
-    return sha256_text(register + "\x1f" + cfg.case_scope)
 
 
 def _hash_embeddings(cfg: CaseConfig) -> str:
@@ -180,12 +173,6 @@ STAGE_ARTEFACTS: dict[str, StageArtefact] = {
         "stage_2_parallel",
         "working/detect_entities.jsonl",
         _hash_register,
-    ),
-    "pii_discovery": StageArtefact(
-        "pii_discovery",
-        "stage_2_parallel",
-        "working/pii_discovery.jsonl",
-        _hash_register_plus_scope,
     ),
     # Stage 3 parallel branches.
     "people_register": StageArtefact(

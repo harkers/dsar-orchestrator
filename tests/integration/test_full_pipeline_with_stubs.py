@@ -259,7 +259,6 @@ def test_full_pipeline_completes_with_stubs(staged_case: Path) -> None:
     assert (staged_case / "working" / "register.json").exists()
     assert (staged_case / "working" / "embeddings.jsonl").exists()
     assert (staged_case / "working" / "detect_entities.jsonl").exists()
-    assert (staged_case / "working" / "pii_discovery.jsonl").exists()
     assert (staged_case / "working" / "cosine_prefilter.jsonl").exists()
     assert (staged_case / "working" / "scope_rerank.jsonl").exists()
     assert (staged_case / "working" / "pii_collection.jsonl").exists()

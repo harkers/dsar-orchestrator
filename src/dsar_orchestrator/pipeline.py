@@ -39,7 +39,7 @@ from dsar_orchestrator.exceptions import (
 #   surgical-re-run targets (--only accepts these as well).
 STAGE_ORDER: tuple[str, ...] = (
     "ingest",
-    "stage_2_parallel",  # { embed ∥ detect_2_1_to_2_4 ∥ pii_discovery }
+    "stage_2_parallel",  # { embed ∥ detect_2_1_to_2_4 }
     "stage_3_parallel",  # { people_register ∥ (scope_prefilter → rerank) }
     "scope_classify",
     "pii_classify",
@@ -54,7 +54,7 @@ STAGE_ORDER: tuple[str, ...] = (
 # surgical-re-run granularity. Each maps to its containing coarse stage.
 SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),
-    "stage_2_parallel": ("embed", "detect_2_1_to_2_4", "pii_discovery"),
+    "stage_2_parallel": ("embed", "detect_2_1_to_2_4"),
     "stage_3_parallel": ("people_register", "scope_prefilter", "rerank"),
     "scope_classify": ("scope_classify",),
     "pii_classify": ("pii_classify",),
@@ -298,14 +298,6 @@ def _run_detect_2_1_to_2_4(cfg: CaseConfig) -> None:
 
     detect_adapter.run_for_case(cfg)
     _check_module_work(cfg, "detect_2_1_to_2_4")
-
-
-def _run_pii_discovery(cfg: CaseConfig) -> None:
-    if not cfg.discovery_enabled:
-        return
-    pii_discovery = _lazy_import("dsar_pii_discovery.core")
-    pii_discovery.discover_entities(cfg.case_path)
-    _check_module_work(cfg, "pii_discovery")
 
 
 def _run_people_register(cfg: CaseConfig) -> None:
@@ -561,18 +553,14 @@ def run(
 def _run_stage_2_parallel(cfg: CaseConfig) -> None:
     """ThreadPoolExecutor fan-out for Stage 2.
 
-    Three branches: embed, detect-2.1-2.4, pii-discovery. Joined with
-    FIRST_EXCEPTION semantics — if any branch raises, the others are
-    cancelled (best-effort; ThreadPoolExecutor cannot truly cancel
-    running tasks but does cancel queued ones) and the exception
-    propagates immediately.
+    Two branches: embed, detect-2.1-2.4. Joined with FIRST_EXCEPTION
+    semantics — if any branch raises, the others are cancelled
+    (best-effort) and the exception propagates immediately.
     """
     targets = [
         ("embed", _run_embed),
         ("detect_2_1_to_2_4", _run_detect_2_1_to_2_4),
     ]
-    if cfg.discovery_enabled:
-        targets.append(("pii_discovery", _run_pii_discovery))
 
     with ThreadPoolExecutor(max_workers=len(targets)) as ex:
         futures = {name: ex.submit(fn, cfg) for name, fn in targets}

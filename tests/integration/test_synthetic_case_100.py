@@ -259,7 +259,6 @@ def test_synthetic_case_all_module_agents_pass(synthetic_100_case) -> None:
         "ingest",
         "embed",
         "detect_2_1_to_2_4",
-        "pii_discovery",
         "people_register",
         "scope_prefilter",
         "rerank",
