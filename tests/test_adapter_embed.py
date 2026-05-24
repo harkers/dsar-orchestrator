@@ -49,16 +49,22 @@ class FakeEmbedResult:
 
 def _make_case_with_register(tmp_path: Path, refs: list[tuple[str, str]]) -> Path:
     """Create a case with N source docs + register.json. `refs` is a
-    list of (ref, content) tuples. Returns case_path."""
+    list of (ref, content) tuples. Returns case_path.
+
+    Per Contract A (issue #8): register.json is a flat list of file-record
+    dicts; extracted text per ref lives at working/<ref>.txt."""
     case_path = tmp_path / "300700"
     (case_path / "source").mkdir(parents=True)
     (case_path / "working").mkdir()
     for ref, content in refs:
+        # Source file (where the toolkit's ingest reads from)
         (case_path / "source" / f"{ref}.txt").write_text(content, encoding="utf-8")
-    register = {
-        "case_no": "300700",
-        "refs": [{"ref": ref, "text_path": f"source/{ref}.txt"} for ref, _ in refs],
-    }
+        # Extracted text (where downstream stages read from)
+        (case_path / "working" / f"{ref}.txt").write_text(content, encoding="utf-8")
+    register = [
+        {"ref": ref, "filename": f"{ref}.txt", "path": str(case_path / "source" / f"{ref}.txt")}
+        for ref, _ in refs
+    ]
     (case_path / "working" / "register.json").write_text(json.dumps(register))
     return case_path
 
@@ -164,25 +170,22 @@ def test_raises_when_register_missing(tmp_path: Path) -> None:
 def test_raises_when_register_has_no_refs(tmp_path: Path) -> None:
     case_path = tmp_path / "300700"
     (case_path / "working").mkdir(parents=True)
-    (case_path / "working" / "register.json").write_text(
-        json.dumps({"case_no": "300700", "refs": []})
-    )
+    # Empty register = empty list (flat-list shape per Contract A / issue #8)
+    (case_path / "working" / "register.json").write_text(json.dumps([]))
     cfg = _make_cfg(case_path)
     with pytest.raises(DSARPipelineError, match="no refs"):
         embed_adapter.run_for_case(cfg, embedder=lambda texts: FakeEmbedResult([]))
 
 
-def test_raises_when_text_path_missing(tmp_path: Path) -> None:
+def test_raises_when_text_file_missing(tmp_path: Path) -> None:
+    """Per Contract A, the toolkit writes extracted text per ref to
+    working/<ref>.txt. If that file is missing, embed raises."""
     case_path = tmp_path / "300700"
     (case_path / "working").mkdir(parents=True)
     (case_path / "working" / "register.json").write_text(
-        json.dumps(
-            {
-                "case_no": "300700",
-                "refs": [{"ref": "x", "text_path": "source/missing.txt"}],
-            }
-        )
+        json.dumps([{"ref": "x", "filename": "x.txt", "path": str(case_path / "source/x.txt")}])
     )
+    # NOTE: deliberately did NOT create working/x.txt
     cfg = _make_cfg(case_path)
     with pytest.raises(DSARPipelineError, match="missing text file"):
         embed_adapter.run_for_case(cfg, embedder=lambda texts: FakeEmbedResult([]))

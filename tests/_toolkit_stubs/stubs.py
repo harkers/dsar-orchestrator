@@ -221,14 +221,14 @@ def make_pii_discovery_stub() -> types.ModuleType:
     mod = types.ModuleType("dsar_pii_discovery.core")
 
     def discover_entities(case_path: Path) -> None:
-        from dsar_orchestrator.hash_chain import sha256_text
+        from dsar_orchestrator.hash_chain import read_register, sha256_text
 
         register_path = case_path / "working" / "register.json"
         register_hash = compute_register_hash(register_path)
         upstream = sha256_text(f"{register_hash}\x1f{_read_case_scope(case_path)}")
-        register = json.loads(register_path.read_text())
+        # Per Contract A (issue #8): register is a flat list.
         rows = []
-        for entry in register["refs"]:
+        for entry in read_register(register_path):
             rows.append(
                 {
                     "ref": entry["ref"],

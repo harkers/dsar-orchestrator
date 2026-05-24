@@ -7,20 +7,20 @@ entry but it derives ``CASE_DIR`` from cwd, so we invoke it via
 
 The ingest stage walks ``<case>/source/``, extracts text via the
 ingest_v3 bridge layer, assigns ref numbers, and writes
-``working/register.json``. This adapter validates the register was
-produced and, if the toolkit hasn't already, stamps an
-``upstream_hash`` field over the source tree so the conductor's
-resume cascade can correctly detect downstream invalidation.
+``working/register.json`` as a **flat list of file-record dicts**
+(toolkit's shape). This adapter validates the register was produced
+and stamps conductor-owned metadata (``upstream_hash`` over source
+tree + schema/producer versions) into a sibling file
+``working/register_meta.json`` so the cascade can detect downstream
+invalidation without mutating the toolkit's artefact.
 
 **Retirement contract.** When the toolkit ships a thin Python entry
 ``dsar_pipeline.ingest.run_for_case(case_path, subject_name)`` that
-writes register.json with the conductor's expected hash field, this
-adapter retires.
+writes the conductor-meta sidecar itself, this adapter retires.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -29,7 +29,7 @@ from pathlib import Path
 
 from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
-from dsar_orchestrator.hash_chain import hash_pairs, sha256_file
+from dsar_orchestrator.hash_chain import hash_pairs, sha256_file, write_register_meta
 
 PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.1.0"
 SCHEMA_VERSION = "1.0"
@@ -85,19 +85,15 @@ def run_for_case(cfg: CaseConfig, *, runner: RunnerFn | None = None) -> None:
 
 
 def _ensure_upstream_hash(case_path: Path, register_path: Path) -> None:
-    """Stamp ``upstream_hash`` over the source tree if the toolkit
-    didn't write one. Idempotent: trust the toolkit's hash if present.
-    Atomic write via temp+rename."""
-    try:
-        register = json.loads(register_path.read_text())
-    except json.JSONDecodeError as exc:
-        raise DSARPipelineError(
-            f"register.json at {register_path} is not valid JSON: {exc}"
-        ) from exc
+    """Write conductor-owned metadata to ``working/register_meta.json``.
 
-    if register.get("upstream_hash"):
-        return
+    Per Contract A (issue #8): the toolkit's register.json is a flat
+    list and is NOT mutated here. The conductor's cascade reads
+    upstream_hash from the sibling meta file instead.
 
+    Always overwrites the meta file (cheap; ingest just ran, source
+    tree is the canonical upstream).
+    """
     src = case_path / "source"
     pairs: list[tuple[str, str]] = []
     if src.exists():
@@ -105,13 +101,9 @@ def _ensure_upstream_hash(case_path: Path, register_path: Path) -> None:
             if p.is_file():
                 rel = str(p.relative_to(src))
                 pairs.append((rel, sha256_file(p)))
-    register["upstream_hash"] = hash_pairs(pairs)
-    register["schema_version"] = SCHEMA_VERSION
-    register["producer_version"] = PRODUCER_VERSION
-
-    tmp_path = register_path.with_suffix(".json.tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(register, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, register_path)
+    write_register_meta(
+        case_path,
+        upstream_hash=hash_pairs(pairs),
+        schema_version=SCHEMA_VERSION,
+        producer_version=PRODUCER_VERSION,
+    )

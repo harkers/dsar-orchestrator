@@ -39,21 +39,22 @@ def _seed_case(tmp_path: Path) -> Path:
 def _fake_runner_writes_register(
     case_path: Path,
     *,
-    upstream_hash: str | None = None,
     refs: list[str] | None = None,
 ):
+    """Mirror real toolkit shape: register.json is a flat list of
+    file-record dicts (per Contract A / issue #8). Conductor metadata
+    lives in the sibling register_meta.json which this adapter writes
+    AFTER the runner succeeds, not in register.json itself."""
     if refs is None:
         refs = ["a", "b"]
 
     def run(argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess:
         working = case_path / "working"
         working.mkdir(parents=True, exist_ok=True)
-        register: dict = {
-            "case_no": case_path.name,
-            "refs": [{"ref": r} for r in refs],
-        }
-        if upstream_hash is not None:
-            register["upstream_hash"] = upstream_hash
+        register: list[dict] = [
+            {"ref": r, "filename": f"{r}.txt", "path": str(case_path / "source" / f"{r}.txt")}
+            for r in refs
+        ]
         (working / "register.json").write_text(json.dumps(register))
         return subprocess.CompletedProcess(args=argv, returncode=0)
 
@@ -94,41 +95,44 @@ def test_subject_omitted_when_missing(tmp_path: Path) -> None:
     assert captured["argv"] == [sys.executable, "-m", "dsar_pipeline.ingest"]
 
 
-def test_passes_existing_upstream_hash_through(tmp_path: Path) -> None:
-    """If the toolkit's ingest already stamped upstream_hash, don't
-    overwrite it."""
+def test_register_json_is_left_as_toolkit_wrote_it(tmp_path: Path) -> None:
+    """Per Contract A (issue #8), the conductor does NOT mutate
+    register.json — it stays as the toolkit wrote it (flat list)."""
     case_path = _seed_case(tmp_path)
     adapter.run_for_case(
         _make_cfg(case_path),
-        runner=_fake_runner_writes_register(case_path, upstream_hash="toolkit-hash"),
+        runner=_fake_runner_writes_register(case_path, refs=["a", "b"]),
     )
     reg = json.loads((case_path / "working" / "register.json").read_text())
-    assert reg["upstream_hash"] == "toolkit-hash"
+    assert isinstance(reg, list)
+    assert [e["ref"] for e in reg] == ["a", "b"]
 
 
-def test_stamps_upstream_hash_when_toolkit_omits_it(tmp_path: Path) -> None:
+def test_writes_register_meta_sibling_with_upstream_hash(tmp_path: Path) -> None:
     case_path = _seed_case(tmp_path)
     adapter.run_for_case(
         _make_cfg(case_path),
-        runner=_fake_runner_writes_register(case_path),  # no upstream_hash
+        runner=_fake_runner_writes_register(case_path),
     )
-    reg = json.loads((case_path / "working" / "register.json").read_text())
-    assert reg["upstream_hash"]
-    assert len(reg["upstream_hash"]) == 64  # sha256 hex
-    assert reg["producer_version"].startswith("dsar_orchestrator.adapters.ingest")
+    meta_path = case_path / "working" / "register_meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert len(meta["upstream_hash"]) == 64  # sha256 hex
+    assert meta["schema_version"] == "1.0"
+    assert meta["producer_version"].startswith("dsar_orchestrator.adapters.ingest")
 
 
-def test_stamped_hash_changes_when_source_changes(tmp_path: Path) -> None:
-    """If the toolkit didn't stamp a hash, the adapter's hash must
-    reflect the source tree — otherwise the cascade misses
-    invalidation."""
+def test_meta_upstream_hash_changes_when_source_changes(tmp_path: Path) -> None:
+    """Cascade-invalidation guarantee: when source/ changes, the
+    register_meta.json upstream_hash changes."""
     case_path = _seed_case(tmp_path)
     adapter.run_for_case(_make_cfg(case_path), runner=_fake_runner_writes_register(case_path))
-    first = json.loads((case_path / "working" / "register.json").read_text())["upstream_hash"]
+    meta_path = case_path / "working" / "register_meta.json"
+    first = json.loads(meta_path.read_text())["upstream_hash"]
 
     (case_path / "source" / "a.txt").write_text("MUTATED")
     adapter.run_for_case(_make_cfg(case_path), runner=_fake_runner_writes_register(case_path))
-    second = json.loads((case_path / "working" / "register.json").read_text())["upstream_hash"]
+    second = json.loads(meta_path.read_text())["upstream_hash"]
     assert first != second
 
 
@@ -157,7 +161,11 @@ def test_raises_when_register_not_produced(tmp_path: Path) -> None:
         adapter.run_for_case(_make_cfg(case_path), runner=silent)
 
 
-def test_raises_on_invalid_register_json(tmp_path: Path) -> None:
+def test_invalid_register_json_does_not_block_meta_write(tmp_path: Path) -> None:
+    """The adapter no longer reads/mutates register.json after Contract A
+    (issue #8). A malformed register.json doesn't block the conductor's
+    meta sidecar (the toolkit's downstream stages will catch malformed
+    register at point-of-use)."""
     case_path = _seed_case(tmp_path)
 
     def garbage_runner(argv, env, cwd):
@@ -166,8 +174,9 @@ def test_raises_on_invalid_register_json(tmp_path: Path) -> None:
         (working / "register.json").write_text("{not valid json}")
         return subprocess.CompletedProcess(args=argv, returncode=0)
 
-    with pytest.raises(DSARPipelineError, match="not valid JSON"):
-        adapter.run_for_case(_make_cfg(case_path), runner=garbage_runner)
+    # Should NOT raise — meta is computed from source/, not from register.json.
+    adapter.run_for_case(_make_cfg(case_path), runner=garbage_runner)
+    assert (case_path / "working" / "register_meta.json").exists()
 
 
 # ─── atomic write ──────────────────────────────────────────────────

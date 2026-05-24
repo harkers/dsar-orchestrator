@@ -89,6 +89,11 @@ def _rerun_hint(sub_stage: str, case_no: str) -> str:
 
 
 def check_ingest(cfg: CaseConfig) -> ModuleCheckResult:
+    """Validate ingest output. Per Contract A (issue #8): register.json
+    is a toolkit-owned flat list; conductor metadata (upstream_hash etc.)
+    lives in working/register_meta.json."""
+    from dsar_orchestrator.hash_chain import read_register, read_register_meta, text_path_for_ref
+
     register_path = cfg.case_path / "working" / "register.json"
     if not register_path.exists():
         return _critical(
@@ -96,29 +101,33 @@ def check_ingest(cfg: CaseConfig) -> ModuleCheckResult:
             _rerun_hint("ingest", cfg.case_no),
         )
     try:
-        register = json.loads(register_path.read_text())
-    except json.JSONDecodeError as e:
+        refs = read_register(register_path)
+    except (json.JSONDecodeError, ValueError) as e:
         return _critical(
-            [f"register.json is not valid JSON: {e}"],
+            [f"register.json malformed: {e}"],
             _rerun_hint("ingest", cfg.case_no),
         )
-    refs = register.get("refs", [])
     if not refs:
         return _critical(
             ["register.json has no refs"],
             "Confirm source/ has documents; " + _rerun_hint("ingest", cfg.case_no),
         )
-    if "upstream_hash" not in register:
+    meta = read_register_meta(cfg.case_path)
+    if meta is None or "upstream_hash" not in meta:
         return _warning(
-            ["register.json missing upstream_hash field"],
-            "Resume cascade won't work for this case until ingest writes "
-            "the hash. " + _rerun_hint("ingest", cfg.case_no),
+            ["working/register_meta.json missing or has no upstream_hash"],
+            "Resume cascade won't work for this case until the conductor's "
+            "ingest adapter writes register_meta.json. " + _rerun_hint("ingest", cfg.case_no),
         )
     missing: list[str] = []
     for entry in refs:
-        text_path = cfg.case_path / entry.get("text_path", "")
+        ref = entry.get("ref")
+        if not ref:
+            missing.append(f"register entry missing ref: {entry!r}")
+            continue
+        text_path = text_path_for_ref(cfg.case_path, ref)
         if not text_path.exists():
-            missing.append(f"text_path missing: {text_path}")
+            missing.append(f"extracted text missing for ref={ref}: {text_path}")
         if len(missing) >= 5:
             break
     if missing:
@@ -186,7 +195,7 @@ def check_detect_2_1_to_2_4(cfg: CaseConfig) -> ModuleCheckResult:
     # Match against register refs
     register = _load_register(cfg)
     if register:
-        register_refs = {entry["ref"] for entry in register.get("refs", [])}
+        register_refs = {entry["ref"] for entry in register}
         detect_refs = {row.get("ref") for row in rows}
         missing_refs = register_refs - detect_refs
         if missing_refs:
@@ -354,7 +363,7 @@ def check_scope_classify(cfg: CaseConfig) -> ModuleCheckResult:
     # Cross-check: every register ref should have a verdict.
     register = _load_register(cfg)
     if register:
-        register_refs = {entry["ref"] for entry in register.get("refs", [])}
+        register_refs = {entry["ref"] for entry in register}
         verdict_refs = {row.get("ref") for row in verdict_rows}
         missing = register_refs - verdict_refs
         if missing:
@@ -513,16 +522,18 @@ def check_export(cfg: CaseConfig) -> ModuleCheckResult:
 # ─── shared helper ─────────────────────────────────────────────────
 
 
-def _load_register(cfg: CaseConfig) -> dict | None:
-    """Best-effort load of working/register.json; returns None if absent
-    or invalid (downstream agents fall back to non-cross-checked
-    validation in that case)."""
+def _load_register(cfg: CaseConfig) -> list[dict] | None:
+    """Best-effort load of working/register.json as a flat list (per
+    Contract A / issue #8). Returns None if absent or invalid
+    (downstream agents fall back to non-cross-checked validation)."""
+    from dsar_orchestrator.hash_chain import read_register
+
     p = cfg.case_path / "working" / "register.json"
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text())
-    except json.JSONDecodeError:
+        return read_register(p)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 

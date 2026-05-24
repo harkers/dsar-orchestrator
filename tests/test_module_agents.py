@@ -66,15 +66,21 @@ def _make_case(tmp_path: Path, case_no: str = "300400") -> Path:
 
 
 def _write_register(case_path: Path, refs: list[str] | None = None) -> None:
+    """Per Contract A (issue #8): register.json is a flat list; conductor
+    metadata lives in working/register_meta.json. Extracted text per ref
+    lives at working/<ref>.txt."""
     refs = refs or ["doc-0001", "doc-0002"]
     for ref in refs:
         (case_path / "source" / f"{ref}.txt").write_text(f"content of {ref}")
-    register = {
-        "case_no": case_path.name,
-        "refs": [{"ref": ref, "text_path": f"source/{ref}.txt"} for ref in refs],
-        "upstream_hash": "abc123",
-    }
+        (case_path / "working" / f"{ref}.txt").write_text(f"content of {ref}")
+    register = [
+        {"ref": ref, "filename": f"{ref}.txt", "path": str(case_path / "source" / f"{ref}.txt")}
+        for ref in refs
+    ]
     (case_path / "working" / "register.json").write_text(json.dumps(register))
+    (case_path / "working" / "register_meta.json").write_text(
+        json.dumps({"upstream_hash": "abc123", "schema_version": "1.0"})
+    )
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:
@@ -91,52 +97,47 @@ def test_ingest_critical_when_register_missing(tmp_path: Path) -> None:
     assert result.severity == "critical"
 
 
-def test_ingest_critical_on_invalid_json(tmp_path: Path) -> None:
+def test_ingest_critical_on_malformed_register(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
     (case_path / "working" / "register.json").write_text("not valid json {")
     result = check_ingest(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "critical"
-    assert "not valid JSON" in result.findings[0]
+    assert "malformed" in result.findings[0]
 
 
 def test_ingest_critical_when_no_refs(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
-    (case_path / "working" / "register.json").write_text(
-        json.dumps({"case_no": case_path.name, "refs": [], "upstream_hash": "abc"})
-    )
+    # Empty register = empty flat list
+    (case_path / "working" / "register.json").write_text(json.dumps([]))
     result = check_ingest(_make_cfg(case_path))
     assert result.ok is False
     assert "no refs" in result.findings[0]
 
 
-def test_ingest_warning_when_upstream_hash_missing(tmp_path: Path) -> None:
+def test_ingest_warning_when_meta_missing(tmp_path: Path) -> None:
+    """Per Contract A (issue #8): conductor meta lives in
+    working/register_meta.json. If absent or missing upstream_hash,
+    the cascade is degraded — warning, not critical."""
     case_path = _make_case(tmp_path)
     (case_path / "source" / "doc-0001.txt").write_text("x")
+    (case_path / "working" / "doc-0001.txt").write_text("x")
     (case_path / "working" / "register.json").write_text(
-        json.dumps(
-            {
-                "case_no": case_path.name,
-                "refs": [{"ref": "doc-0001", "text_path": "source/doc-0001.txt"}],
-            }
-        )
+        json.dumps([{"ref": "doc-0001", "filename": "doc-0001.txt", "path": "source/doc-0001.txt"}])
     )
+    # NOTE: deliberately did NOT write register_meta.json
     result = check_ingest(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "warning"
 
 
-def test_ingest_critical_when_text_path_missing(tmp_path: Path) -> None:
+def test_ingest_critical_when_text_file_missing(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
     (case_path / "working" / "register.json").write_text(
-        json.dumps(
-            {
-                "case_no": case_path.name,
-                "refs": [{"ref": "x", "text_path": "source/does-not-exist.txt"}],
-                "upstream_hash": "abc",
-            }
-        )
+        json.dumps([{"ref": "x", "filename": "x.txt", "path": "source/x.txt"}])
     )
+    (case_path / "working" / "register_meta.json").write_text(json.dumps({"upstream_hash": "abc"}))
+    # NOTE: did NOT create working/x.txt
     result = check_ingest(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "critical"
