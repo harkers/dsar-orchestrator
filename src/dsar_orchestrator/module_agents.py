@@ -466,25 +466,25 @@ def check_redact(cfg: CaseConfig) -> ModuleCheckResult:
 def check_redact_verify(cfg: CaseConfig) -> ModuleCheckResult:
     if not cfg.redact_verify_enabled:
         return _ok(["REDACT_VERIFY_ENABLED=false; skipping"])
-    audit_path = Path.home() / ".dsar-audit" / cfg.case_no / "redact_verify.jsonl"
+    audit_path = cfg.case_path / "working" / "post_bake_findings.jsonl"
     rows = _load_jsonl(audit_path)
     if not rows:
         return _critical(
-            [f"redact_verify.jsonl missing or empty at {audit_path}"],
+            [f"post_bake_findings.jsonl missing or empty at {audit_path}"],
             _rerun_hint("redact_verify", cfg.case_no),
         )
-    # Any row with passed=false should have caused a halt already; if
-    # we see one here without a halt, the toolkit module is misbehaving.
-    failures = [row for row in rows if row.get("passed") is False]
-    if failures:
+    # Any high-severity finding should have caused a halt already; if we
+    # see one here without a halt, the toolkit module is misbehaving.
+    high_findings = [row for row in rows if row.get("severity") == "high"]
+    if high_findings:
         return _critical(
             [
-                f"{len(failures)} verifier failure(s) recorded but pipeline "
+                f"{len(high_findings)} high-severity finding(s) recorded but pipeline "
                 f"continued — toolkit module may not be raising halt"
             ],
-            "Check dsar_redact_verify implementation; " + _rerun_hint("redact_verify", cfg.case_no),
+            "Check post_bake_verify implementation; " + _rerun_hint("redact_verify", cfg.case_no),
         )
-    return _ok([f"redact_verify: {len(rows)} entries, all passed"])
+    return _ok([f"post_bake_findings: {len(rows)} entries, no high-severity findings"])
 
 
 # ─── export ─────────────────────────────────────────────────────────

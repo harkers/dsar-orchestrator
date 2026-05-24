@@ -29,12 +29,14 @@ class _PassingVerdict:
     all_passed = True
     failed_doc_count = 0
     failed_verifier_summary = ""
+    audit_log_path = Path("/tmp/post_bake_findings.jsonl")
 
 
 class _FailingVerdict:
     all_passed = False
     failed_doc_count = 3
     failed_verifier_summary = "presidio_residual: 3 docs"
+    audit_log_path = Path("/tmp/post_bake_findings.jsonl")
 
 
 # ─── happy path ────────────────────────────────────────────────────
@@ -82,11 +84,18 @@ def test_halts_pipeline_when_verdict_fails(tmp_path: Path) -> None:
 def test_halt_message_includes_audit_log_path(tmp_path: Path) -> None:
     case_path = tmp_path / "700100"
     case_path.mkdir()
+    failing_audit = case_path / "working" / "post_bake_findings.jsonl"
+
+    class _FailingV:
+        all_passed = False
+        failed_doc_count = 3
+        failed_verifier_summary = "presidio_residual: 3 docs"
+        audit_log_path = failing_audit
+
     with pytest.raises(PipelineHalt) as ei:
-        adapter.run_for_case(_make_cfg(case_path), verify_fn=lambda _: _FailingVerdict())
+        adapter.run_for_case(_make_cfg(case_path), verify_fn=lambda _: _FailingV())
     msg = str(ei.value)
-    assert ".dsar-audit" in msg
-    assert "redact_verify.jsonl" in msg
+    assert str(failing_audit) in msg
     assert case_path.name in msg
 
 
