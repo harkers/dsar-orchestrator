@@ -490,6 +490,35 @@ def check_bake(cfg: CaseConfig) -> ModuleCheckResult:
     return _ok([f"bake: redacted/ contains {len(files)} entries"])
 
 
+# ─── verify_spec ────────────────────────────────────────────────────
+
+
+def check_verify_spec(cfg: CaseConfig) -> ModuleCheckResult:
+    """verify_spec validator — always-on, no enable flag.
+
+    Same shape as check_verify_pdf: read the toolkit-written audit
+    JSONL, count severity-high rows, raise critical if any leaked
+    through without a pipeline halt.
+    """
+    audit_path = cfg.case_path / "working" / "verify_spec_findings.jsonl"
+    rows = _load_jsonl(audit_path)
+    if not rows:
+        return _critical(
+            [f"verify_spec_findings.jsonl missing or empty at {audit_path}"],
+            _rerun_hint("verify_spec", cfg.case_no),
+        )
+    high_findings = [row for row in rows if row.get("severity") == "high"]
+    if high_findings:
+        return _critical(
+            [
+                f"{len(high_findings)} high-severity finding(s) recorded but pipeline "
+                f"continued — toolkit module may not be raising halt"
+            ],
+            "Check verify_spec implementation; " + _rerun_hint("verify_spec", cfg.case_no),
+        )
+    return _ok([f"verify_spec_findings: {len(rows)} entries, no high-severity findings"])
+
+
 # ─── verify_pdf ─────────────────────────────────────────────────────
 
 
@@ -581,6 +610,7 @@ CHECKERS: dict[str, callable] = {
     "scope_classify": check_scope_classify,
     "pii_classify": check_pii_classify,
     "redact": check_redact,
+    "verify_spec": check_verify_spec,
     "bake": check_bake,
     "verify_pdf": check_verify_pdf,
     "export": check_export,
