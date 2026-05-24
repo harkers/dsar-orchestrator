@@ -551,8 +551,21 @@ def check_verify_pdf(cfg: CaseConfig) -> ModuleCheckResult:
         )
     # Any high-severity finding should have caused a halt already; if we
     # see one here without a halt, the toolkit module is misbehaving.
+    # Exception: synthetic cases. The verify_pdf adapter (v0.4.7) explicitly
+    # tolerates these because synth cases legitimately fail
+    # gate_audit_completeness (no operator decisions log) and
+    # gate_structural (no draft/ disclosure pack). The "toolkit misbehaving"
+    # phrasing assumes operator workflow.
     high_findings = [row for row in rows if row.get("severity") == "high"]
     if high_findings:
+        if cfg.synthetic:
+            return _warning(
+                [
+                    f"{len(high_findings)} high-severity finding(s) on synthetic case — "
+                    f"expected (no operator decisions log; no draft/ disclosure pack)"
+                ],
+                "Adapter tolerated; check post_bake_findings.jsonl for details.",
+            )
         return _critical(
             [
                 f"{len(high_findings)} high-severity finding(s) recorded but pipeline "
