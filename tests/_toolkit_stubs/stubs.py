@@ -248,19 +248,20 @@ def make_pii_discovery_stub() -> types.ModuleType:
 # monkeypatch their subprocess runners directly.
 
 
-# ─── redact_verify ─────────────────────────────────────────────────
+# ─── post_bake_verify ──────────────────────────────────────────────
 
 
-def make_redact_verify_stub() -> types.ModuleType:
-    mod = types.ModuleType("dsar_redact_verify.core")
+def make_post_bake_verify_stub() -> types.ModuleType:
+    mod = types.ModuleType("dsar_pipeline.post_bake_verify")
 
     class Verdict:
-        def __init__(self) -> None:
+        def __init__(self, case_path: Path) -> None:
             self.all_passed = True
             self.failed_doc_count = 0
             self.failed_verifier_summary = ""
+            self.audit_log_path = case_path / "working" / "post_bake_findings.jsonl"
 
-    def verify_case(case_path: Path) -> Verdict:
+    def verify_for_conductor(case_path: Path) -> Verdict:
         # Stub: write a passing verdict to the audit log.
 
         redacted_dir = case_path / "redacted"
@@ -270,9 +271,9 @@ def make_redact_verify_stub() -> types.ModuleType:
                 rel = str(p.relative_to(redacted_dir))
                 pairs.append((rel, sha256_file(p)))
         upstream = hash_pairs(pairs)
-        audit_path = Path.home() / ".dsar-audit" / case_path.name / "redact_verify.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(audit_path, "a") as f:
+        findings_path = case_path / "working" / "post_bake_findings.jsonl"
+        findings_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(findings_path, "a") as f:
             f.write(
                 json.dumps(
                     {
@@ -283,9 +284,9 @@ def make_redact_verify_stub() -> types.ModuleType:
                 )
                 + "\n"
             )
-        return Verdict()
+        return Verdict(case_path)
 
-    mod.verify_case = verify_case
+    mod.verify_for_conductor = verify_for_conductor
     return mod
 
 
@@ -302,5 +303,5 @@ def all_stubs() -> dict[str, types.ModuleType]:
         "dsar_rerank.core": make_rerank_core_stub(),
         "dsar_pii_classifier.core": make_pii_classifier_stub(),
         "dsar_pii_discovery.core": make_pii_discovery_stub(),
-        "dsar_redact_verify.core": make_redact_verify_stub(),
+        "dsar_pipeline.post_bake_verify": make_post_bake_verify_stub(),
     }

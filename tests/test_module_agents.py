@@ -529,39 +529,40 @@ def test_redact_verify_skipped_when_disabled(tmp_path: Path) -> None:
     assert result.ok is True
 
 
-def test_redact_verify_critical_when_log_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_redact_verify_critical_when_log_missing(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
     result = check_redact_verify(_make_cfg(case_path))
     assert result.ok is False
     assert result.severity == "critical"
 
 
-def test_redact_verify_happy(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_redact_verify_happy(tmp_path: Path) -> None:
     case_path = _make_case(tmp_path)
-    audit_dir = tmp_path / ".dsar-audit" / case_path.name
-    audit_dir.mkdir(parents=True)
     _jsonl(
-        audit_dir / "redact_verify.jsonl",
-        [{"event": "verify_complete", "passed": True, "upstream_hash": "h"}],
+        case_path / "working" / "post_bake_findings.jsonl",
+        [
+            {"ref": "D001", "gate": "gate_render", "severity": "low", "issue": "minor"},
+            {"ref": "D002", "gate": "gate_density", "severity": "medium", "issue": "warn"},
+        ],
     )
     result = check_redact_verify(_make_cfg(case_path))
     assert result.ok is True
 
 
-def test_redact_verify_critical_on_recorded_failure(tmp_path: Path, monkeypatch) -> None:
-    """If the verifier wrote a passed=false row but the pipeline kept
+def test_redact_verify_critical_on_recorded_failure(tmp_path: Path) -> None:
+    """If the verifier wrote a high-severity finding but the pipeline kept
     running, the toolkit is misbehaving — flag it."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     case_path = _make_case(tmp_path)
-    audit_dir = tmp_path / ".dsar-audit" / case_path.name
-    audit_dir.mkdir(parents=True)
     _jsonl(
-        audit_dir / "redact_verify.jsonl",
+        case_path / "working" / "post_bake_findings.jsonl",
         [
-            {"event": "verify", "passed": True, "ref": "a"},
-            {"event": "verify", "passed": False, "ref": "b"},
+            {"ref": "D001", "gate": "gate_render", "severity": "low", "issue": "minor"},
+            {
+                "ref": "D002",
+                "gate": "gate_density",
+                "severity": "high",
+                "issue": "critical problem",
+            },
         ],
     )
     result = check_redact_verify(_make_cfg(case_path))
