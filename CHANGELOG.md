@@ -6,6 +6,37 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-24
+
+### Changed — Contract B (issues #10/#11/#12)
+
+- **BREAKING (pre-1.0 waiver):** Removed `pii_discovery` stage from `stage_2_parallel` (closes #10). The toolkit doesn't ship `dsar_pii_discovery.core`; the discovery functionality is folded into `dsar_pii_classifier.core.discover_case()` which the pii_classify stage already calls. `pii_discovery` no longer a valid `--only` target. `discovery_enabled` config field kept as deprecated no-op for one release; removal target = v0.5.0.
+- Rewired `_run_scope_filter_chain` rerank branch to use new `adapters/rerank.py` (closes #11). The conductor was lazy-importing the non-existent `dsar_rerank.core`. New adapter calls `dsar_clients.tei_rerank_client.rerank_pairs(query=case_scope, docs=[texts])` directly — mirror of the embed adapter's existing tei-client rewire.
+- `check_pii_classify` now tolerates empty `pii_collection.jsonl` when scope_classify produced zero `"present"` verdicts (closes #12, interim). Halts critical only when ≥1 docs are in-scope and PII findings missing. Filed harkers/dsar-toolkit#120 for the long-term aggregation fix; conductor follow-up issue dsar-orchestrator#13 tracks the pivot when toolkit lands aggregation.
+
+### Added — Contract B principle (durable)
+
+- `VERSIONING.md §4` *Toolkit-coupling contract*: every conductor lazy-import target must exist in the toolkit; every adapter writes what consumers + agents expect; new adapters must be exercised by the real-toolkit smoke test.
+- `tests/test_contract_b_no_fictional_modules.py` — AST-walk enforcement under `@pytest.mark.needs_toolkit` plus a non-gated walker-sanity test.
+- `tests/integration/test_real_toolkit_smoke.py` now exports `EXPECTED_TOOLKIT_MODULES` documenting the intended toolkit-module set.
+- Contract B pointer added to `src/dsar_orchestrator/__init__.py` module docstring.
+
+### Added — new adapter
+
+- `src/dsar_orchestrator/adapters/rerank.py`. Mirror of the embed adapter pattern: injectable client protocol, `working/cosine_prefilter.jsonl` → `working/scope_rerank.jsonl` with cascade-correct upstream_hash. Retires when toolkit ships `dsar_pipeline.rerank.run_for_case`.
+
+### Tests
+
+- 5 new tests in `tests/test_adapter_rerank.py` covering happy path, threshold edge, empty input, client error, missing prerequisite.
+- 3 new tests in `tests/test_module_agent_pii_classify.py` covering smart-empty tolerance.
+- 2 new tests in `tests/test_contract_b_no_fictional_modules.py` (AST walker sanity + the gated `needs_toolkit` enforcement).
+- Removed: 4 pii_discovery-specific tests across `test_stages.py`, `test_module_agents.py`, `test_config.py` plus assertions in `test_synthetic_case_100.py`, `test_full_pipeline_with_stubs.py`, `test_real_toolkit_smoke.py`.
+- Hermetic baseline: 297 passing (was 293).
+
+### Coordination
+
+- Toolkit-side issue filed: harkers/dsar-toolkit#120 (`pii_classifier_stage: write working/pii_collection.jsonl aggregating per-stage findings`). Conductor v0.4.0 ships interim smart-empty tolerance; conductor's `adapters/pii_classify.py` pivots to consume the toolkit's aggregated file in a follow-up release (tracked as dsar-orchestrator#13).
+
 ### Fixed — 0.1.1 (issue #8: register.json shape)
 - Closes #8 — conductor's `register.json` consumers were assuming a dict envelope `{refs: [...], upstream_hash, schema_version, producer_version}` but the real toolkit writes a **flat list** of file-record dicts. End-to-end runs crashed at ingest with `AttributeError: 'list' object has no attribute 'get'`. Hermetic tests passed because the in-test stubs synthesised dict-shape registers.
 - **Contract A**: conductor adapts to the toolkit's flat-list shape. Conductor-owned metadata (`upstream_hash`, `schema_version`, `producer_version`) moves to a sibling file `working/register_meta.json` written by the conductor's ingest adapter.
@@ -72,5 +103,6 @@ the v4 adapter sprint).
 - Schema and producer-version stamping on every artefact row
   (`SCHEMA_VERSION = "1.0"`, per-module `PRODUCER_VERSION`).
 
-[Unreleased]: https://github.com/harkers/dsar-orchestrator/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/harkers/dsar-orchestrator/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/harkers/dsar-orchestrator/compare/v0.3.0...v0.4.0
 [0.1.0]: https://github.com/harkers/dsar-orchestrator/releases/tag/v0.1.0

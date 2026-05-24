@@ -26,6 +26,20 @@ import pytest
 from dsar_orchestrator.pipeline import run
 from dsar_orchestrator.synthesis import synthesize_case
 
+# Contract B / VERSIONING.md §4: every toolkit module the conductor
+# lazy-imports lives here. The AST-walker test
+# (tests/test_contract_b_no_fictional_modules.py) validates the *actual*
+# call sites resolve against the installed toolkit; this list documents
+# the *intended* set so new additions are visible in one place.
+EXPECTED_TOOLKIT_MODULES: tuple[str, ...] = (
+    "dsar_clients.tei_embed_client",
+    "dsar_clients.tei_rerank_client",  # NEW in Contract B / #11
+    "dsar_pii_classifier.core",
+    "dsar_pipeline.people_register",
+    "dsar_pipeline.post_bake_verify",
+    "dsar_pipeline.verify_spec",
+)
+
 
 def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
     """Cheap TCP probe — does NOT validate the service speaks HTTP."""

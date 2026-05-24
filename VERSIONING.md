@@ -98,6 +98,37 @@ Coordination rules:
 - The conductor's `dsar-conductor` CLI flags are the conductor's
   public surface; CLI rename/removal is a MAJOR bump.
 
+## 4. Toolkit-coupling contract (Contract B)
+
+Three invariants the conductor must hold against the operator-installable
+`dsar-toolkit`:
+
+1. **Every `_lazy_import("dsar_*.module")` target must exist in the
+   toolkit at the version pinned in `pyproject.toml`.** Drift here =
+   silent failure that only surfaces against the real toolkit (see
+   issues #1, #10, #11).
+2. **Every conductor adapter writes the artefact its downstream
+   consumers + module-agent expect.** Path, shape, and required fields
+   are part of the adapter's public contract — changes bump
+   `PRODUCER_VERSION` and `SCHEMA_VERSION` per §3 + §2.
+3. **New adapters added to the conductor must be exercised by
+   `tests/integration/test_real_toolkit_smoke.py`** before merge. The
+   smoke test is the executable form of this contract.
+
+**Enforcement:** `tests/test_contract_b_no_fictional_modules.py`
+AST-walks every conductor source file, collects every literal-string
+`_lazy_import` / `importlib.import_module` target in the `dsar_*`
+namespace, and (under `@pytest.mark.needs_toolkit`) asserts
+`importlib.util.find_spec(...)` returns non-None for each. The
+companion `EXPECTED_TOOLKIT_MODULES` tuple at the top of
+`test_real_toolkit_smoke.py` documents the intended set.
+
+**Relationship to Contract A:** Contract A (issue #8) fixed the
+conductor's shape assumption about `register.json`. Contract B
+generalises: any conductor assumption about the toolkit (module names,
+output paths, aggregation, shape) is a coupling that must be verified
+executably, not just documented.
+
 ## What does NOT count as a version bump
 
 - Code in `tests/`, `scripts/`, or `docs/` that doesn't ship in the wheel.
