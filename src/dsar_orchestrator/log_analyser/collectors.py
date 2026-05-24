@@ -22,7 +22,7 @@ KNOWN_LOGS = (
 
 # Logs written by the toolkit into <case>/working/ (not under ~/.dsar-audit).
 # Collected from the case working directory, not the audit root.
-WORKING_KNOWN_LOGS = ("post_bake_findings.jsonl",)
+WORKING_KNOWN_LOGS = ("verify_spec_findings.jsonl", "post_bake_findings.jsonl")
 
 
 def _read_jsonl_safely(path: Path, max_rows: int = 5000) -> list[dict[str, Any]]:
@@ -146,7 +146,13 @@ def basic_stats(logs: dict[str, list[dict]]) -> dict[str, Any]:
         "disputed_doc_count": sum(
             1 for r in logs.get("scope_recheck.jsonl", []) if r.get("verdict") == "disputed"
         ),
+        # Combined count across both verifier findings files (verify_spec
+        # = pre-bake, post_bake = post-bake). Downstream consumers don't
+        # need to disambiguate; if they do later, add separate counts.
         "verify_failed_count": sum(
-            1 for r in logs.get("post_bake_findings.jsonl", []) if r.get("severity") == "high"
+            1
+            for name in ("verify_spec_findings.jsonl", "post_bake_findings.jsonl")
+            for r in logs.get(name, [])
+            if r.get("severity") == "high"
         ),
     }

@@ -26,7 +26,7 @@ Categories of issues to look for:
 4. **dispute_rate** — high count of disputed verdicts in
    scope_recheck.jsonl (>5% of pii_collection rows = warning, >20% =
    critical)
-5. **verify_failure** — any post_bake_findings.jsonl row with severity=='high'
+5. **verify_failure** — any row with severity=='high' in either verify_spec_findings.jsonl (pre-bake) or post_bake_findings.jsonl (post-bake)
 6. **schema_violation** — rows missing schema_version or
    producer_version
 7. **llm_cost** — unusual concentration of LLM calls or unexpected
