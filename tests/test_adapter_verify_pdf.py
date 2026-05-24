@@ -1,6 +1,6 @@
-"""Tests for the redact_verify adapter — `adapters.redact_verify`.
+"""Tests for the verify_pdf adapter — `adapters.verify_pdf`.
 
-Adapter calls ``dsar_redact_verify.core.verify_case`` and inspects the
+Adapter calls ``dsar_pipeline.post_bake_verify.verify_for_conductor`` and inspects the
 Verdict object. Verifier is injected so tests are hermetic.
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from dsar_orchestrator.adapters import redact_verify as adapter
+from dsar_orchestrator.adapters import verify_pdf as adapter
 from dsar_orchestrator.config import CaseConfig, SubjectIdentifier
 from dsar_orchestrator.exceptions import PipelineHalt
 

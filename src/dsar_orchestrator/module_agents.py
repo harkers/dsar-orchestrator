@@ -490,10 +490,10 @@ def check_bake(cfg: CaseConfig) -> ModuleCheckResult:
     return _ok([f"bake: redacted/ contains {len(files)} entries"])
 
 
-# ─── redact_verify ──────────────────────────────────────────────────
+# ─── verify_pdf ─────────────────────────────────────────────────────
 
 
-def check_redact_verify(cfg: CaseConfig) -> ModuleCheckResult:
+def check_verify_pdf(cfg: CaseConfig) -> ModuleCheckResult:
     if not cfg.redact_verify_enabled:
         return _ok(["REDACT_VERIFY_ENABLED=false; skipping"])
     audit_path = cfg.case_path / "working" / "post_bake_findings.jsonl"
@@ -501,7 +501,7 @@ def check_redact_verify(cfg: CaseConfig) -> ModuleCheckResult:
     if not rows:
         return _critical(
             [f"post_bake_findings.jsonl missing or empty at {audit_path}"],
-            _rerun_hint("redact_verify", cfg.case_no),
+            _rerun_hint("verify_pdf", cfg.case_no),
         )
     # Any high-severity finding should have caused a halt already; if we
     # see one here without a halt, the toolkit module is misbehaving.
@@ -512,7 +512,7 @@ def check_redact_verify(cfg: CaseConfig) -> ModuleCheckResult:
                 f"{len(high_findings)} high-severity finding(s) recorded but pipeline "
                 f"continued — toolkit module may not be raising halt"
             ],
-            "Check post_bake_verify implementation; " + _rerun_hint("redact_verify", cfg.case_no),
+            "Check post_bake_verify implementation; " + _rerun_hint("verify_pdf", cfg.case_no),
         )
     return _ok([f"post_bake_findings: {len(rows)} entries, no high-severity findings"])
 
@@ -582,7 +582,7 @@ CHECKERS: dict[str, callable] = {
     "pii_classify": check_pii_classify,
     "redact": check_redact,
     "bake": check_bake,
-    "redact_verify": check_redact_verify,
+    "verify_pdf": check_verify_pdf,
     "export": check_export,
 }
 

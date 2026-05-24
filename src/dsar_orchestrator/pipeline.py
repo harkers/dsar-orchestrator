@@ -45,7 +45,7 @@ STAGE_ORDER: tuple[str, ...] = (
     "pii_classify",
     "redact",
     "bake",  # NEW in v5.0
-    "redact_verify",
+    "verify_pdf",
     "export",
 )
 
@@ -59,7 +59,7 @@ SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "pii_classify": ("pii_classify",),
     "redact": ("redact",),
     "bake": ("bake",),  # NEW in v5.0
-    "redact_verify": ("redact_verify",),
+    "verify_pdf": ("verify_pdf",),
     "export": ("export",),
 }
 
@@ -143,7 +143,7 @@ def build_stage_plan(
         if s == "pii_classify" and cfg.pii_classify_mode == "off":
             candidate.remove(s)
             plan.skipped.append((s, "PII_CLASSIFY_MODE=off"))
-        if s == "redact_verify" and not cfg.redact_verify_enabled:
+        if s == "verify_pdf" and not cfg.redact_verify_enabled:
             candidate.remove(s)
             plan.skipped.append((s, "REDACT_VERIFY_ENABLED=false"))
 
@@ -390,14 +390,14 @@ def _run_bake(cfg: CaseConfig) -> None:
     _check_module_work(cfg, "bake")
 
 
-def _run_redact_verify(cfg: CaseConfig) -> RunReport | None:
+def _run_verify_pdf(cfg: CaseConfig) -> RunReport | None:
     """Returns None on success; raises PipelineHalt on any verifier failure."""
-    # ADAPTER for redact_verify (retires when toolkit ships
-    # `dsar_redact_verify.core.verify_case_for_conductor(case_path)`).
-    from dsar_orchestrator.adapters import redact_verify as redact_verify_adapter
+    # ADAPTER for verify_pdf (retires when toolkit ships
+    # `dsar_pipeline.post_bake_verify.verify_for_conductor(case_path)`).
+    from dsar_orchestrator.adapters import verify_pdf as verify_pdf_adapter
 
-    redact_verify_adapter.run_for_case(cfg)
-    _check_module_work(cfg, "redact_verify")
+    verify_pdf_adapter.run_for_case(cfg)
+    _check_module_work(cfg, "verify_pdf")
     return None
 
 
@@ -517,10 +517,10 @@ def run(
             with StageBanner(audit, "bake"):
                 _run_bake(cfg)
 
-        # Stage 8 — redact-verify (Phase 6, halt-on-fail)
-        if plan.includes("redact_verify"):
-            with StageBanner(audit, "redact_verify"):
-                _run_redact_verify(cfg)
+        # Stage 8 — verify-pdf (Phase 6, halt-on-fail)
+        if plan.includes("verify_pdf"):
+            with StageBanner(audit, "verify_pdf"):
+                _run_verify_pdf(cfg)
 
         # Stage 9 — export
         if plan.includes("export"):
