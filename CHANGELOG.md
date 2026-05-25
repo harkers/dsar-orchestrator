@@ -6,6 +6,31 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-05-25
+
+### Fixed — subprocess PATH-robustness (closes #15)
+
+- Conductor adapters that shell out to toolkit CLIs (`dsar-redact`, `dsar-bake`, `dsar-scope-check`, `python -m dsar_pipeline.{ingest,detect,export}`) previously inherited PATH from `os.environ`. On hosts where the toolkit is ALSO installed via homebrew/system pip, the system-installed shims in `/opt/homebrew/bin/` shadow the venv copy via PATH ordering — bug fixes in the venv toolkit get silently shadowed.
+- New `src/dsar_orchestrator/subprocess_env.py::build_subprocess_env()` returns a copy of `os.environ` with `sys.executable`'s bin dir prepended to PATH. Idempotent; stdlib-only leaf module.
+- 6 adapters updated to use it: `ingest`, `detect_2_1_to_2_4`, `scope_classify`, `redact`, `bake`, `export`. (verify_pdf + verify_spec use lazy Python imports, not subprocess; unaffected.)
+- All 13 adapter `PRODUCER_VERSION` strings bumped to `0.4.9` in lockstep per VERSIONING.md §3.
+- 5 new tests in `test_subprocess_env.py` covering: prepends-venv-bin, idempotent-when-first, empty-PATH, copy-not-reference, preserves-other-vars.
+- Hermetic count: 316 passing (was 311; +5).
+- Operator impact: `dsar-conductor` now works without `PATH=...venv/bin:$PATH` prefix even when the homebrew toolkit shim is present.
+
+## [0.4.8] - 2026-05-24
+
+### Fixed — check_verify_pdf warning on synthetic cases
+
+- Paired with v0.4.7's `verify_pdf` adapter synth-tolerance. When the adapter prints a warning and continues on `cfg.synthetic` (because gate_audit_completeness + gate_structural legitimately can't pass without operator workflow), the conductor's `check_verify_pdf` module agent must also downgrade from critical to warning — otherwise it re-flags the same findings immediately.
+- Both halves needed to land for the cross-test to actually clear verify_pdf on synth cases. (Caught during cross-test iteration; should've been one PR.)
+
+## [0.4.7] - 2026-05-24
+
+### Fixed — verify_pdf adapter tolerates failures on synthetic cases
+
+- Synthetic cases legitimately fail `gate_audit_completeness` (no operator decisions log) and `gate_structural` (no `draft/` disclosure pack) because there's no operator workflow. Adapter now prints a warning and returns instead of raising `PipelineHalt` when `cfg.synthetic` is True. Real operator cases halt as before — verify_pdf is the safety net we don't bypass.
+
 ## [0.4.6] - 2026-05-24
 
 ### Fixed — bake adapter sets DSAR_AUTO_SIGNOFF=1 on synthetic cases

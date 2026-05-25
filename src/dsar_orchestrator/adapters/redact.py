@@ -29,7 +29,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file, sha256_text
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.redact 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.redact 0.4.9"
 SCHEMA_VERSION = "1.0"
 DEFAULT_CLI = "dsar-redact"
 
@@ -60,7 +60,9 @@ def run_for_case(
     if runner is None:
         runner = _default_runner()
 
-    env = dict(os.environ)
+    from dsar_orchestrator.subprocess_env import build_subprocess_env
+
+    env = build_subprocess_env()
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
 
     argv = [cli, "--case", cfg.case_no]

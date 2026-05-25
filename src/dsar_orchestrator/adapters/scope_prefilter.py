@@ -29,7 +29,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.scope_prefilter 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.scope_prefilter 0.4.9"
 SCHEMA_VERSION = "1.0"
 DEFAULT_THRESHOLD = 0.30  # mirrors the toolkit's prefilter_scope default
 
