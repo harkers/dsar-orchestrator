@@ -136,9 +136,12 @@ def test_synthetic_case_auto_resolves_flag_entries(tmp_path: Path) -> None:
     assert redacts == [False, False, True]  # flag → False; others untouched
 
 
-def test_non_synthetic_case_does_not_rewrite_flags(tmp_path: Path) -> None:
-    """Real operator cases (cfg.synthetic=False) leave flag entries
-    intact — flag resolution is the operator's call."""
+def test_non_synthetic_case_halts_on_pending_flags(tmp_path: Path) -> None:
+    """Real operator cases (cfg.synthetic=False, resolve_flags_as=None)
+    halt with an actionable message before invoking bake when pending
+    flags exist. Issue #26."""
+    from dsar_orchestrator.exceptions import PipelineHalt
+
     case_path = tmp_path / "900002"
     tags = _seed_tags(
         case_path,
@@ -149,8 +152,10 @@ def test_non_synthetic_case_does_not_rewrite_flags(tmp_path: Path) -> None:
     (case_path / "redacted").mkdir()
     (case_path / "redacted" / "doc.pdf").write_text("baked")
 
-    adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+    with pytest.raises(PipelineHalt, match="pending detect-stage flags"):
+        adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
 
+    # Flags NOT rewritten (halt was raised before any helper ran).
     unchanged = json.loads(tags.read_text())
     assert unchanged["entities"][0]["redact"] == "flag"
 
@@ -192,9 +197,12 @@ def test_synthetic_case_clears_register_notes(tmp_path: Path) -> None:
     assert all(d["notes"] == "" for d in rewritten)
 
 
-def test_non_synthetic_case_leaves_register_notes_intact(tmp_path: Path) -> None:
-    """Real operator cases (cfg.synthetic=False) leave register.json
-    notes intact — operator workflow signal."""
+def test_non_synthetic_case_register_notes_trigger_halt(tmp_path: Path) -> None:
+    """Real operator cases (cfg.synthetic=False, resolve_flags_as=None)
+    halt when register.json::notes mentions 'flagged for review'.
+    Issue #26."""
+    from dsar_orchestrator.exceptions import PipelineHalt
+
     case_path = tmp_path / "900005"
     working = case_path / "working"
     working.mkdir(parents=True)
@@ -204,7 +212,112 @@ def test_non_synthetic_case_leaves_register_notes_intact(tmp_path: Path) -> None
     (case_path / "redacted").mkdir()
     (case_path / "redacted" / "doc.pdf").write_text("baked")
 
-    adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+    with pytest.raises(PipelineHalt, match="pending detect-stage flags"):
+        adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
 
+    # Notes NOT cleared by the halt path.
     unchanged = json.loads((working / "register.json").read_text())
     assert unchanged[0]["notes"] == "6 items flagged for review"
+
+
+# ─── issue #26: operator opt-in via --resolve-flags-as ─────────────
+
+
+def _make_cfg_with_resolve(case_path: Path, resolve_flags_as: str) -> CaseConfig:
+    return CaseConfig(
+        case_no=case_path.name,
+        case_path=case_path,
+        case_scope="t",
+        subject_identifier=SubjectIdentifier(primary_name="t"),
+        synthetic=False,
+        resolve_flags_as=resolve_flags_as,
+    )
+
+
+def test_resolve_flags_as_false_resolves_to_false(tmp_path: Path) -> None:
+    case_path = tmp_path / "900100"
+    tags = _seed_tags(
+        case_path,
+        "D001",
+        [
+            {"text": "a@x", "type": "email", "redact": "flag"},
+            {"text": "b@x", "type": "email", "redact": True},
+        ],
+    )
+    (case_path / "working" / "redaction_input.jsonl").write_text("")
+    (case_path / "redacted").mkdir()
+    (case_path / "redacted" / "doc.pdf").write_text("baked")
+
+    adapter.run_for_case(
+        _make_cfg_with_resolve(case_path, "false"),
+        runner=lambda *a, **k: _ok_completed(a[0]),
+    )
+
+    rewritten = json.loads(tags.read_text())
+    redacts = [e["redact"] for e in rewritten["entities"]]
+    assert redacts == [False, True]  # flag → False; True untouched
+
+
+def test_resolve_flags_as_true_resolves_to_true(tmp_path: Path) -> None:
+    case_path = tmp_path / "900101"
+    tags = _seed_tags(
+        case_path,
+        "D001",
+        [{"text": "a@x", "type": "email", "redact": "flag"}],
+    )
+    (case_path / "working" / "redaction_input.jsonl").write_text("")
+    (case_path / "redacted").mkdir()
+    (case_path / "redacted" / "doc.pdf").write_text("baked")
+
+    adapter.run_for_case(
+        _make_cfg_with_resolve(case_path, "true"),
+        runner=lambda *a, **k: _ok_completed(a[0]),
+    )
+
+    rewritten = json.loads(tags.read_text())
+    assert rewritten["entities"][0]["redact"] is True
+
+
+def test_real_case_with_no_flags_does_not_halt(tmp_path: Path) -> None:
+    """When operator has already resolved all flags (no flag entries +
+    no 'flagged for review' notes), the pre-bake gate is a no-op."""
+    case_path = tmp_path / "900102"
+    _seed_tags(
+        case_path,
+        "D001",
+        [{"text": "a@x", "type": "email", "redact": True}],
+    )
+    (case_path / "working" / "redaction_input.jsonl").write_text("")
+    (case_path / "redacted").mkdir()
+    (case_path / "redacted" / "doc.pdf").write_text("baked")
+
+    # Should NOT raise — no flags to resolve.
+    adapter.run_for_case(_make_cfg(case_path), runner=lambda *a, **k: _ok_completed(a[0]))
+
+
+def test_count_pending_flags_counts_both_sources(tmp_path: Path) -> None:
+    """The pre-bake gate counts entity-level flags AND register notes."""
+    from dsar_orchestrator.adapters.bake import _count_pending_flags
+
+    case_path = tmp_path / "900103"
+    working = case_path / "working"
+    working.mkdir(parents=True)
+    _seed_tags(
+        case_path,
+        "D001",
+        [
+            {"text": "a", "redact": "flag"},
+            {"text": "b", "redact": "flag"},
+            {"text": "c", "redact": False},
+        ],
+    )
+    register = [
+        {"ref": "D001", "notes": "2 items flagged for review"},
+        {"ref": "D002", "notes": ""},
+        {"ref": "D003", "notes": "1 items flagged for review"},
+    ]
+    (working / "register.json").write_text(json.dumps(register))
+
+    entity_count, notes_count = _count_pending_flags(case_path)
+    assert entity_count == 2  # two redact:"flag" entries
+    assert notes_count == 2  # two docs with "flagged for review"

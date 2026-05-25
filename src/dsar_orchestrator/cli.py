@@ -95,6 +95,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--resolve-flags-as",
+        choices=("true", "false"),
+        default=None,
+        metavar="<true|false>",
+        help=(
+            "Operator opt-in: auto-resolve all detect-stage 'flag' entries "
+            "to redact:true|false before bake. Without this, real cases "
+            "with pending flags halt with an actionable message. "
+            "Also settable via DSAR_RESOLVE_FLAGS_AS env var. See #26."
+        ),
+    )
+    p.add_argument(
         "--version",
         action="version",
         version=f"dsar-conductor (dsar_orchestrator) {__version__}",
@@ -108,6 +120,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.only_stage and (args.from_stage or args.through_stage):
         parser.error("--only is mutually exclusive with --from / --through")
+
+    # --resolve-flags-as → env var → CaseConfig at load time (#26).
+    # Done via env (rather than threading through run() kwargs) so the
+    # config layer is the single source of truth.
+    if args.resolve_flags_as is not None:
+        import os as _os
+
+        _os.environ["DSAR_RESOLVE_FLAGS_AS"] = args.resolve_flags_as
 
     try:
         run(

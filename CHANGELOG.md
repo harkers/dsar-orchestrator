@@ -6,6 +6,21 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-25
+
+### Added — operator opt-in for flag resolution on real cases (closes #26)
+
+- New `--resolve-flags-as <true|false>` CLI flag (also `DSAR_RESOLVE_FLAGS_AS` env var). When set, conductor auto-resolves all detect-stage `redact:"flag"` entries to the given value before invoking bake. Operator explicit opt-in for non-interactive runs (different from `cfg.synthetic` which is implicit).
+- New `resolve_flags_as: str | None` field on `CaseConfig` (loaded from env / case_config.json).
+- New pre-bake gate `_halt_on_pending_flags` in `adapters/bake.py`: when `cfg.synthetic=False` AND `resolve_flags_as=None` AND any flags pending → halt with actionable `PipelineHalt` message listing entity flag count + doc note count and pointing the operator at the two options (manual edit or `--resolve-flags-as`). Closes the operator UX gap left over from #18.
+- New `_count_pending_flags(case_path) -> (entity_count, notes_count)` helper for tests + future UI integrations.
+- New `_resolve_all_flags_to(case_path, target: bool)` helper — non-synth variant of the synthetic auto-resolve. Reuses the register.json::notes clear logic.
+- `PRODUCER_VERSION` on `adapters/bake.py` bumped to 0.5.0.
+- 4 new tests: opt-in-resolves-to-false, opt-in-resolves-to-true, no-flags-no-halt, _count_pending_flags counts both sources.
+- 2 existing "non-synth preserves" tests updated: now assert the halt + intact-state behaviour.
+- Hermetic count: 320 passing (was 316; +4).
+- Version: pre-1.0 MINOR (additive CLI flag + additive CaseConfig field + new gate behaviour gated behind opt-in defaults).
+
 ## [0.4.9] - 2026-05-25
 
 ### Fixed — subprocess PATH-robustness (closes #15)

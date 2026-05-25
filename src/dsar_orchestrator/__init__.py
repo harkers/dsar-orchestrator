@@ -9,7 +9,7 @@ Contract A (#8) and Contract B (#10/#11/#12) are the established
 precedents — read §4 before adding a new adapter or `_lazy_import`.
 """
 
-__version__ = "0.4.9"
+__version__ = "0.5.0"
 
 from dsar_orchestrator.exceptions import (
     BudgetExceededError,
