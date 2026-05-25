@@ -87,6 +87,15 @@ class CaseConfig:
     # and must resolve flags explicitly. See dsar-orchestrator#18.
     synthetic: bool = False
 
+    # Operator opt-in for non-interactive flag resolution on real cases.
+    # When None (default), the bake adapter's pre-check halts with an
+    # actionable message listing pending flags. When set to "true" or
+    # "false", the adapter auto-resolves all pending flags to that
+    # value before invoking bake — operator explicitly accepts the
+    # default. Set via --resolve-flags-as CLI flag or
+    # DSAR_RESOLVE_FLAGS_AS env var. See dsar-orchestrator#26.
+    resolve_flags_as: str | None = None
+
 
 def _read_override_file(name: str) -> str | None:
     """Read the contents of a ~/.dsar-<name>-mode file, if present."""
@@ -174,8 +183,28 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
         ),
         llm_concurrency=int(os.environ.get("DSAR_LLM_CONCURRENCY", raw.get("llm_concurrency", 5))),
         synthetic=bool(raw.get("synthetic", False)),
+        resolve_flags_as=_normalise_resolve_flags(
+            os.environ.get("DSAR_RESOLVE_FLAGS_AS", raw.get("resolve_flags_as"))
+        ),
     )
     return cfg
+
+
+def _normalise_resolve_flags(value: object) -> str | None:
+    """Coerce raw value to one of {None, "true", "false"}; raise on
+    anything else. Issue #26."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    sv = str(value).strip().lower()
+    if sv in ("", "none"):
+        return None
+    if sv in ("true", "1", "yes", "on"):
+        return "true"
+    if sv in ("false", "0", "no", "off"):
+        return "false"
+    raise ValueError(f"resolve_flags_as must be one of None/true/false (got {value!r})")
 
 
 def _resolve_bool(env_var: str, config_value: bool) -> bool:
