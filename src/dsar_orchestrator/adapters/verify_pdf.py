@@ -26,7 +26,7 @@ from typing import Any
 from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError, PipelineHalt
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.verify_pdf 0.4.7"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.verify_pdf 0.4.9"
 
 # Injectable verifier: (case_path) -> Verdict-like.
 # Production resolution lazy-imports dsar_pipeline.post_bake_verify.verify_for_conductor.

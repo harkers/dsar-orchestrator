@@ -32,7 +32,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import hash_pairs, sha256_file, write_register_meta
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.4.2"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.ingest 0.4.9"
 SCHEMA_VERSION = "1.0"
 
 # runner(argv, env, cwd) -> CompletedProcess
@@ -59,7 +59,9 @@ def run_for_case(cfg: CaseConfig, *, runner: RunnerFn | None = None) -> None:
     if runner is None:
         runner = _default_runner()
 
-    env = dict(os.environ)
+    from dsar_orchestrator.subprocess_env import build_subprocess_env
+
+    env = build_subprocess_env()
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
 
     subject_name = cfg.subject_identifier.primary_name if cfg.subject_identifier else ""

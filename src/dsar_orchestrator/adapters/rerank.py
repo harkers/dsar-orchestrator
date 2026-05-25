@@ -29,7 +29,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file, sha256_text
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.rerank 0.4.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.rerank 0.4.9"
 SCHEMA_VERSION = "1.0"
 
 

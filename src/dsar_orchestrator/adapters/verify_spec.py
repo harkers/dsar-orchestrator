@@ -32,7 +32,7 @@ from typing import Any
 from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError, PipelineHalt
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.verify_spec 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.verify_spec 0.4.9"
 
 # Injectable verifier: (case_path) -> Verdict-like.
 # Production resolution lazy-imports dsar_pipeline.verify_spec.verify_for_conductor.

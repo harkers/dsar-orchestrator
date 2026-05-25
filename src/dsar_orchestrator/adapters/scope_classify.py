@@ -31,7 +31,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.scope_classify 0.3.0"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.scope_classify 0.4.9"
 SCHEMA_VERSION = "1.0"
 DEFAULT_CLI = "dsar-scope-check"
 
@@ -70,7 +70,9 @@ def run_for_case(
 
     # Toolkit's CLI resolves --case via $DSAR_CASE_ROOT/<id>. Set
     # the env so it lands on cfg.case_path.
-    env = dict(os.environ)
+    from dsar_orchestrator.subprocess_env import build_subprocess_env
+
+    env = build_subprocess_env()
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
 
     # Upstream artefact for the cascade depends on rerank mode.

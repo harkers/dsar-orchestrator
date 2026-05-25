@@ -27,7 +27,7 @@ from dsar_orchestrator.config import CaseConfig
 from dsar_orchestrator.exceptions import DSARPipelineError
 from dsar_orchestrator.hash_chain import sha256_file
 
-PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.6"
+PRODUCER_VERSION = "dsar_orchestrator.adapters.bake 0.4.9"
 SCHEMA_VERSION = "1.0"
 DEFAULT_BAKE_CLI = "dsar-bake"
 
@@ -68,7 +68,9 @@ def run_for_case(
     if cfg.synthetic:
         _auto_resolve_synthetic_flags(cfg.case_path)
 
-    env = dict(os.environ)
+    from dsar_orchestrator.subprocess_env import build_subprocess_env
+
+    env = build_subprocess_env()
     env["DSAR_CASE_ROOT"] = str(cfg.case_path.parent)
     # Skip the toolkit's MRA post-stage hooks (internal QA tooling that
     # imports a `module_agents` package not part of the conductor's
