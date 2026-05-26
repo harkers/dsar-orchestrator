@@ -183,6 +183,13 @@ def synthetic_100_case(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(_export, "_default_runner", lambda: _fake_export_runner)
 
     result = synthesize_case("800500", case_dir_root)
+    # synthesize_case pre-dates the Phase-5 canary gate. Disable fitness
+    # pre-flight for this integration suite (not in scope for synthetic
+    # data flows).
+    cfg_path = result.case_path / "case_config.json"
+    cfg_raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg_raw["fitness_check_enabled"] = False
+    cfg_path.write_text(json.dumps(cfg_raw, indent=2), encoding="utf-8")
     return result
 
 

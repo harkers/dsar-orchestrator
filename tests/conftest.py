@@ -44,3 +44,21 @@ def audit_root(tmp_path: Path) -> Path:
     root = tmp_path / "dsar-audit"
     root.mkdir()
     return root
+
+
+@pytest.fixture(autouse=True)
+def _isolate_orchestrator_env(monkeypatch):
+    """Autouse: reset orchestrator-owned env vars on each test boundary.
+
+    The CLI's ``_dispatch_run`` sets ``DSAR_FORCE_SKIP_FITNESS_REASON`` /
+    ``DSAR_RESOLVE_FLAGS_AS`` via ``os.environ[...] = …``. Without this
+    fixture those leak across tests in the same pytest process and
+    pollute config defaults asserted in other suites. ``monkeypatch.delenv``
+    snapshots the pre-test state (unset) and restores it on teardown,
+    so any in-test assignment is wiped.
+    """
+    for name in (
+        "DSAR_FORCE_SKIP_FITNESS_REASON",
+        "DSAR_RESOLVE_FLAGS_AS",
+    ):
+        monkeypatch.delenv(name, raising=False)

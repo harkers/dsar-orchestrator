@@ -53,9 +53,18 @@ def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
 @pytest.fixture
 def real_synthetic_case(tmp_path):
     """Generate a 4-doc synthetic case under tmp_path/cases/."""
+    import json as _json
+
     case_root = tmp_path / "cases"
     case_root.mkdir(parents=True)
-    return synthesize_case("700100", case_root, doc_count=4, seed=42)
+    result = synthesize_case("700100", case_root, doc_count=4, seed=42)
+    # synthesize_case pre-dates the Phase-5 canary gate. Disable fitness
+    # pre-flight for this real-toolkit smoke (not in scope here).
+    cfg_path = result.case_path / "case_config.json"
+    cfg_raw = _json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg_raw["fitness_check_enabled"] = False
+    cfg_path.write_text(_json.dumps(cfg_raw, indent=2), encoding="utf-8")
+    return result
 
 
 @pytest.mark.needs_toolkit

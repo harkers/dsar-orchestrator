@@ -229,6 +229,9 @@ def staged_case(with_toolkit_stubs):
         },
         "rerank_mode": "shadow",
         "pii_classify_mode": "shadow",
+        # Pre-dates the Phase-5 canary gate; not in scope for these stub
+        # tests which don't exercise the fitness pre-flight.
+        "fitness_check_enabled": False,
     }
     (case_path / "case_config.json").write_text(json.dumps(config))
     return case_path

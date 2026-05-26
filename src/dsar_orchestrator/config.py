@@ -215,7 +215,12 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
             else None
         ),
         fitness_check_max_report_age_days=int(raw.get("fitness_check_max_report_age_days", 30)),
-        force_skip_fitness_reason=str(raw.get("force_skip_fitness_reason", "")),
+        force_skip_fitness_reason=str(
+            os.environ.get(
+                "DSAR_FORCE_SKIP_FITNESS_REASON",
+                raw.get("force_skip_fitness_reason", "") or "",
+            )
+        ),
     )
     return cfg
 

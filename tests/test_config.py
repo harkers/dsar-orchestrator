@@ -190,3 +190,21 @@ def test_case_config_fitness_check_fields_from_yaml(tmp_path):
     assert cfg.fitness_check_canary_path == Path("/tmp/canary")
     assert cfg.fitness_check_max_report_age_days == 7
     assert cfg.force_skip_fitness_reason == "operator pilot run"
+
+
+def test_case_config_force_skip_fitness_env_overrides_yaml(tmp_path, monkeypatch):
+    """``DSAR_FORCE_SKIP_FITNESS_REASON`` env var wins over ``case_config.json``.
+
+    Same env > config precedence pattern as ``DSAR_RESOLVE_FLAGS_AS``.
+    The CLI ``--force-skip-fitness "<reason>"`` flag sets this env var
+    so the pre-flight downstream sees the operator's choice.
+    """
+    case_dir = tmp_path / "case_envskip"
+    case_dir.mkdir()
+    (case_dir / "case_config.json").write_text(
+        '{"case_no": "TEST", "case_scope": "x", "force_skip_fitness_reason": ""}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DSAR_FORCE_SKIP_FITNESS_REASON", "from-env")
+    cfg = load_case_config("TEST", case_root=case_dir)
+    assert cfg.force_skip_fitness_reason == "from-env"

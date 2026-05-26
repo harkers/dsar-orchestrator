@@ -15,12 +15,12 @@ from dsar_orchestrator.cli import build_parser
 def test_parser_requires_case() -> None:
     p = build_parser()
     with pytest.raises(SystemExit):
-        p.parse_args([])
+        p.parse_args(["run"])
 
 
 def test_parser_minimal_args() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001"])
+    args = p.parse_args(["run", "--case", "300001"])
     assert args.case == "300001"
     assert args.from_stage is None
     assert args.through_stage is None
@@ -31,53 +31,53 @@ def test_parser_minimal_args() -> None:
 
 def test_parser_check_flag() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--check"])
+    args = p.parse_args(["run", "--case", "300001", "--check"])
     assert args.check is True
 
 
 def test_parser_dry_run_flag() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--dry-run"])
+    args = p.parse_args(["run", "--case", "300001", "--dry-run"])
     assert args.dry_run is True
 
 
 def test_parser_from_stage_choices() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--from", "redact"])
+    args = p.parse_args(["run", "--case", "300001", "--from", "redact"])
     assert args.from_stage == "redact"
 
 
 def test_parser_rejects_unknown_stage() -> None:
     p = build_parser()
     with pytest.raises(SystemExit):
-        p.parse_args(["--case", "300001", "--from", "made_up_stage"])
+        p.parse_args(["run", "--case", "300001", "--from", "made_up_stage"])
 
 
 def test_parser_only_stage() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--only", "embed"])
+    args = p.parse_args(["run", "--case", "300001", "--only", "embed"])
     assert args.only_stage == "embed"
 
 
 def test_parser_force_flag_defaults_false() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001"])
+    args = p.parse_args(["run", "--case", "300001"])
     assert args.force is False
 
 
 def test_parser_force_flag_set() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--force"])
+    args = p.parse_args(["run", "--case", "300001", "--force"])
     assert args.force is True
 
 
 def test_parser_acknowledge_issues_defaults_false() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001"])
+    args = p.parse_args(["run", "--case", "300001"])
     assert args.acknowledge_issues is False
 
 
 def test_parser_acknowledge_issues_set() -> None:
     p = build_parser()
-    args = p.parse_args(["--case", "300001", "--acknowledge-issues"])
+    args = p.parse_args(["run", "--case", "300001", "--acknowledge-issues"])
     assert args.acknowledge_issues is True
