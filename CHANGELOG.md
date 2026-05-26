@@ -6,6 +6,18 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-26
+
+### Added — stage-rail enforcement on operator-console GET routes
+
+- Forward routes (`/unextractable`, `/leak-review`, `/blockers`, `/release-check`, `/closure-letter`) are gated by the current pipeline phase. Deep-link attempts past the current phase 303 back to `/` with a banner naming both phases (`'Release' isn't reachable yet — case is in 'Discovery'.`). Read-only drilldowns (`/pipeline`, `/audit`, `/file`) stay unguarded.
+- New `ROUTE_REQUIRED_PHASE` mapping declares min-phase per route.
+- New `current_phase_key(state)` helper resolves stage → phase; logs warning on unknown stage (state-file corruption shouldn't fail silently into a fully-gated console).
+- New `is_route_accessible(state, path)` returns `(allowed, message)` so the redirect banner can be self-explanatory.
+- 19 new tests in `tests/test_stage_enforcement.py` cover the contract per route × phase.
+- Hermetic count: 371 passing (was 352; +19).
+- Version: pre-1.0 PATCH (additive route guard; no API changes).
+
 ## [0.7.0] - 2026-05-26
 
 ### Added — R001-R010 reason-code taxonomy on operator decisions

@@ -340,6 +340,66 @@ def _file_size(path: Path) -> str:
     return f"{n:.1f}TB"
 
 
+# --- Stage-rail enforcement ------------------------------------------------
+#
+# Operators cannot deep-link past the current phase. The jury's "pipeline
+# integrity beats speed" principle: surfacing a Release-phase page while
+# the case is still in Discovery hides which decisions still need to land
+# in the earlier phase. Forward routes get hard-gated; read-only drilldowns
+# (/pipeline, /audit, /file) stay open.
+#
+# Mapping intentionally key=route → required_phase_key (smallest phase that
+# unlocks the route). Routes not in the dict are unguarded.
+
+_PHASE_INDEX = {p["key"]: i for i, p in enumerate(PHASES)}
+
+ROUTE_REQUIRED_PHASE: dict[str, str] = {
+    "/unextractable": "discovery",
+    "/leak-review": "redact",
+    "/blockers": "release",
+    "/release-check": "release",
+    "/closure-letter": "release",
+}
+
+
+def current_phase_key(state: dict) -> str:
+    """Return the phase key matching ``state['current_stage']``. Unknown
+    stages fall back to the first phase ('discovery') with a warning —
+    falling back silently would hide a state-file corruption from the
+    operator until they wonder why every page is gated."""
+    current = state.get("current_stage", "")
+    for phase in PHASES:
+        if current in phase["stages"]:
+            return phase["key"]
+    log.warning(
+        "current_stage=%r not in any known phase; falling back to %s",
+        current,
+        PHASES[0]["key"],
+    )
+    return PHASES[0]["key"]
+
+
+def is_route_accessible(state: dict, path: str) -> tuple[bool, str | None]:
+    """Return ``(True, None)`` if the operator can reach ``path`` given the
+    current pipeline state; ``(False, msg)`` if the route belongs to a
+    later phase. ``msg`` names both the current and required phase so the
+    redirect banner can be self-explanatory."""
+    required_key = ROUTE_REQUIRED_PHASE.get(path)
+    if not required_key:
+        return True, None
+    required_idx = _PHASE_INDEX[required_key]
+    cur_key = current_phase_key(state)
+    cur_idx = _PHASE_INDEX[cur_key]
+    if cur_idx >= required_idx:
+        return True, None
+    cur_label = next(p["label"] for p in PHASES if p["key"] == cur_key)
+    req_label = next(p["label"] for p in PHASES if p["key"] == required_key)
+    return (
+        False,
+        f"'{req_label}' isn't reachable yet — case is in '{cur_label}'.",
+    )
+
+
 def phase_status(state: dict, phase: dict) -> str:
     """Returns 'done' / 'current' / 'pending' for the phase."""
     current = state["current_stage"]
@@ -1873,6 +1933,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         global _LAST_ACTION_RESULT
         url = urllib.parse.urlparse(self.path)
         ctx = self._ctx()
+        # Stage-rail enforcement: deep-links past the current phase 303
+        # back to the landing page with a banner explaining why.
+        if url.path in ROUTE_REQUIRED_PHASE:
+            state = load_orchestrator_state(ctx)
+            allowed, msg = is_route_accessible(state, url.path)
+            if not allowed:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": msg,
+                    "command": f"GET {url.path} blocked by stage-rail enforcement",
+                }
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
         ar = _LAST_ACTION_RESULT
         if url.path == "/":
             state = load_orchestrator_state(ctx)
