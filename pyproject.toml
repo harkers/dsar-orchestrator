@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsar-orchestrator"
-version = "0.5.0"
+version = "0.6.0"
 description = "Orchestrator for the harkers/dsar-toolkit modular DSAR processing stack"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,7 @@ dev = [
 dsar-conductor = "dsar_orchestrator.cli:main"
 dsar-analyse-logs = "dsar_orchestrator.log_analyser.cli:main"
 dsar-synthesize-case = "dsar_orchestrator.synthesis.cli:main"
+dsar-operator-console = "dsar_orchestrator.operator_console:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -6,6 +6,22 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-26
+
+### Added — operator console v2 (web UI) + local_broker helpers
+
+- New `dsar-operator-console` CLI script (entry point in `pyproject.toml`). Starts a stdlib `ThreadingHTTPServer` against a case directory and serves the operator workflow: stage rail, action queue, pipeline drilldown with auto-generated writer-model RAG summaries, dedupe findings, approver verdict view, blockers checklist, unextractable review, leak review, closure-letter auto-draft, audit log viewer.
+- New package `dsar_orchestrator.local_broker/` with five helpers:
+  - `stage_summariser.py` — writer-model RAG summary per pipeline stage with PII redaction (`_redact_pii`, `_redact_path`), broker eviction risk check, sha256-based cache invalidation.
+  - `dedupe_filter.py` — `canonical_refs(case_dir)` returns the canonical doc-ref set (None = no dedupe yet; empty = warn; non-empty = filter). `INCLUDE_DUPLICATES=1` env override.
+  - `closure_letter.py` — `compute_funnel()`, `readiness_state()`, `draft_letter()`. Auto-generates the DSAR closure letter from case state with ICO-careful wording (e.g. "incidentally mentioned but not substantively relating" rather than "work context").
+  - `unextractable.py` — diffs `agent01_input.jsonl` vs `ingested_items.jsonl`; per-row decisions `accept` / `reject` / `retry` (re-invoking `dsar_pipeline.ingest_v3.ingest`). Writes to `audit/unextractable_decisions.jsonl`.
+  - `leak_review.py` — lists `status=failed` redactions; per-row decisions `accept_exclude` / `include_with_note` / `retried_ok|fail` / `manual_fix_done`. `retry_redaction()` re-invokes `redact_document` (cwd-sensitive — chdirs into case_dir first). Writes to `audit/leak_review_decisions.jsonl`.
+- Console reads JSONL artefacts directly from `<case>/working/` and `<case>/audit/`; no DB. State is per-case via `CaseContext`.
+- Hermetic count: still 320 passing — console code is currently uncovered by tests (known gap; v3 PRs add coverage per surface).
+- Version: pre-1.0 MINOR (purely additive subsystem; no existing CLI / module changes).
+- Foundation for the v3 console build (stage-rail enforcement, reason codes, audit hash chain, QA flow).
+
 ## [0.5.0] - 2026-05-25
 
 ### Added — operator opt-in for flag resolution on real cases (closes #26)
