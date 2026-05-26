@@ -6,6 +6,36 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-26
+
+### Added — R001-R010 reason-code taxonomy on operator decisions
+
+- New `dsar_orchestrator.local_broker.reason_codes` module defines the 11 codes operators choose from when recording any decision:
+  - `R001` Correct DS match
+  - `R002` Not DS personal data
+  - `R003` Work-context only
+  - `R004` Duplicate of reviewed item
+  - `R005` Third-party redaction required
+  - `R006` Special category — escalate (note required)
+  - `R007` Redaction confirmed accurate
+  - `R008` Redaction incomplete
+  - `R009` Technical extraction issue
+  - `R010` Withhold pending legal review (note required)
+  - `R-PENDING` Pending classification (note required + auto-escalates after 24 h)
+- `validate_reason_code(code, note)` raises on missing, unknown, or note-required-but-empty.
+- `is_r_pending_stale(ts_iso, *, now=None)` flags R-PENDING decisions past the 24-h escalation window; malformed timestamps treated as stale (safer to escalate than swallow).
+- Wired into `leak_review.record_decision`, `unextractable.record_decision`, `operator_console.toggle_blocker_resolved` — all now take a required `reason_code` keyword. Validation happens before chain emit; `reason_code` is carried into both the user-visible JSONL row and the hash-chained REVIEWER_DECISION_MADE event.
+- 6 UI forms (3 blocker-toggle, 1 each in unextractable accept/reject, 3 in leak-review accept/include/manual-fix) gained a `<select name='reason_code' required>` with the 11 options.
+- 3 route handlers (`/api/blocker/toggle`, `/api/unextractable/decide`, `/api/leak-review/decide`) extract `reason_code` from form and surface validation errors via `_LAST_ACTION_RESULT`.
+- Backwards compat: historical decisions (pre-v0.7.0) lacking `reason_code` render their existing note + timestamp; new decisions show an R-code badge alongside.
+- Hermetic count: 352 passing (was 334; +18).
+- Version: pre-1.0 MINOR (additive but breaking API on three internal functions — callers in the same package were updated in this PR; no external API).
+
+### Followups (task #114 + open)
+
+- Compensating REVIEWER_DECISION_FAILED chain event for the reverse-drift case (task #114, deferred from v0.6.1 review).
+- Auto-escalation of stale R-PENDING decisions to DPO (notification infra not yet present; `is_r_pending_stale` is ready to feed it).
+
 ## [0.6.1] - 2026-05-26
 
 ### Added — hash-chained audit emission on operator-console decisions

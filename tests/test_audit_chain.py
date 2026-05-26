@@ -138,7 +138,9 @@ def test_emit_failure_blocks_jsonl_write_leak_review(case_dir: Path, monkeypatch
     monkeypatch.setattr("dsar_orchestrator.local_broker.audit_chain.emit_for_case_dir", broken_emit)
     shim = leak_review._CaseShim(case_dir=case_dir)
     with pytest.raises(RuntimeError, match="chain emit failed"):
-        leak_review.record_decision(shim, doc_ref="doc-001", decision="accept_exclude", note="")
+        leak_review.record_decision(
+            shim, doc_ref="doc-001", decision="accept_exclude", reason_code="R001", note=""
+        )
     jsonl_path = case_dir / "audit" / "leak_review_decisions.jsonl"
     assert not jsonl_path.exists() or jsonl_path.read_text().strip() == ""
 
@@ -153,7 +155,7 @@ def test_blocker_toggle_state_written_after_chain(case_dir: Path) -> None:
 
     (case_dir / "working" / "data_subject.json").write_text(json.dumps({"case_no": "TEST-100"}))
     ctx = CaseContext(case_dir=case_dir)
-    toggle_blocker_resolved(ctx, "BLOCK-007", resolved=True, note="ok")
+    toggle_blocker_resolved(ctx, "BLOCK-007", resolved=True, reason_code="R001", note="ok")
     state = load_console_state(ctx)
     assert "BLOCK-007" in state.get("resolved_blockers", {})
     assert state["resolved_blockers"]["BLOCK-007"]["note"] == "ok"
@@ -210,7 +212,11 @@ def test_leak_review_record_decision_emits_chain_event(case_dir: Path) -> None:
     shim = leak_review._CaseShim(case_dir=case_dir)
     (case_dir / "working" / "data_subject.json").write_text(json.dumps({"case_no": "TEST-100"}))
     leak_review.record_decision(
-        shim, doc_ref="doc-001", decision="accept_exclude", note="documented exemption"
+        shim,
+        doc_ref="doc-001",
+        decision="accept_exclude",
+        reason_code="R001",
+        note="documented exemption",
     )
     events = _read_events(case_dir)
     assert len(events) == 1
@@ -225,7 +231,11 @@ def test_unextractable_record_decision_emits_chain_event(case_dir: Path) -> None
     shim = unextractable._CaseShim(case_dir=case_dir)
     (case_dir / "working" / "data_subject.json").write_text(json.dumps({"case_no": "TEST-100"}))
     unextractable.record_decision(
-        shim, source_path="/data/missing.eml", decision="accept", note="known broken"
+        shim,
+        source_path="/data/missing.eml",
+        decision="accept",
+        reason_code="R009",
+        note="known broken",
     )
     events = _read_events(case_dir)
     assert len(events) == 1
@@ -242,7 +252,9 @@ def test_blocker_toggle_emits_chain_event(case_dir: Path) -> None:
 
     (case_dir / "working" / "data_subject.json").write_text(json.dumps({"case_no": "TEST-100"}))
     ctx = CaseContext(case_dir=case_dir)
-    toggle_blocker_resolved(ctx, "BLOCK-007", resolved=True, note="verified by DPO")
+    toggle_blocker_resolved(
+        ctx, "BLOCK-007", resolved=True, reason_code="R007", note="verified by DPO"
+    )
     events = _read_events(case_dir)
     assert len(events) == 1
     assert events[0]["stage"] == "blocker_toggle"

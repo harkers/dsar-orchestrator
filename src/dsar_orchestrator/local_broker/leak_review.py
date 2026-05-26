@@ -148,6 +148,7 @@ def list_leaks(ctx: _CaseShim) -> list[dict]:
                 "entity_count": entity_count,
                 "redact_count": redact_count,
                 "decision": d.get("decision", "pending"),
+                "decision_reason_code": d.get("reason_code", ""),
                 "decision_note": d.get("note", ""),
                 "decision_ts": d.get("ts", ""),
             }
@@ -155,13 +156,24 @@ def list_leaks(ctx: _CaseShim) -> list[dict]:
     return out
 
 
-def record_decision(ctx: _CaseShim, *, doc_ref: str, decision: str, note: str = "") -> dict:
+def record_decision(
+    ctx: _CaseShim,
+    *,
+    doc_ref: str,
+    decision: str,
+    reason_code: str,
+    note: str = "",
+) -> dict:
     if decision not in DECISIONS:
         raise ValueError(f"unknown decision: {decision!r}")
+    from dsar_orchestrator.local_broker.reason_codes import validate_reason_code
+
+    validate_reason_code(reason_code, note)
     row = {
         "ts": _iso_now(),
         "doc_ref": doc_ref,
         "decision": decision,
+        "reason_code": reason_code,
         "note": note,
     }
     # Chain-first: if schema/IO breaks, the user-visible JSONL row is not written.
