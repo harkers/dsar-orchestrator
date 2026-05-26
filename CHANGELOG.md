@@ -6,6 +6,23 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-05-26
+
+### Added — dsar-context-classify-mini CLI promoted to conductor (#111 sub-4)
+
+- New `dsar_orchestrator.local_broker.context_classify_mini` + `dsar-context-classify-mini` CLI. Promoted from `audit/agent04-mini.py`.
+- Local-broker context classifier (model alias `mini`) bypassing the toolkit's `QwenContextClient` (hardcoded remote 30B endpoint, ~120s/call on local hardware). Output is agent05-compatible: `durant_verdict` + `primary_classification` + `is_about_requester` + `confidence` + `requester_role` + `evidence_snippet` + `recommended_action` + `rationale`.
+- Best-effort `_coerce_parsed` clamps confidence to [0, 1], maps unknown enums to safe defaults (durant→ambiguous, primary→other, is_about→unclear), truncates over-long string fields (rationale 500 / durant_rationale 600 / evidence_snippet 300 / role+action 32). Bad rows never raise — they land as `error_state` rows in agent05-compatible shape so downstream consumers don't have to special-case errors.
+- Output lands at `<case-root>/working/context_classifications.jsonl`; per-50-doc progress at `<case-root>/audit/context-classify-mini-progress.jsonl`.
+- Same case-root parameterisation + resume + canonical-only dedupe-filter handling as the other promoted scripts.
+- 12 broker-free tests in `tests/test_context_classify_mini.py` covering module surface, case-root resolution, `_coerce_parsed` (confidence clamping, unknown-enum fallbacks for each enum field, field truncation), `classify_one` (happy / empty-content / network-error paths), `run()` end-to-end (processes all + skips resumed; returns 1 on missing inputs).
+- Hermetic count: 445 passing (was 433; +12).
+- Version: pre-1.0 PATCH.
+
+### Followups
+
+- 2 promotions remaining under #111: agent06-tagger, calibration_portal.
+
 ## [0.9.3] - 2026-05-26
 
 ### Added — dsar-durant-recheck CLI promoted to conductor (#111 sub-3)
