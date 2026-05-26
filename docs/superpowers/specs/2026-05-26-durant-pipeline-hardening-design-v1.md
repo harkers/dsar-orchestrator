@@ -1031,4 +1031,116 @@ The spec is implemented when:
 
 ---
 
+## 10. Integration with existing code
+
+This module **extends** existing code; it does not replace `gate_durant`, `scope_check_stage`, or `agent22_scope_check`. Every existing test under `tests/test_gate_durant.py`, `test_durant_prompt_template.py`, `test_scope_decisions.py` continues to pass — the changes are additive (loader-backed prompt, optional truncation strategies, optional recheck stage, etc.). Existing operator workflows (`dsar-pipeline`, `dsar-scope-check`, conductor's `scope_classify` stage) keep their interfaces.
+
+### 10.1 dsar-toolkit changes
+
+| File | Current state | Change |
+|---|---|---|
+| `src/dsar_pipeline/gates/gate_durant.py` | `GateDurant(BaseGateAgent)`, inline `DURANT_SYSTEM_PROMPT`, `max_text_chars=8000`, uses `RoleRouter` | **Refactor:** switch system prompt source to `PromptLoader.load("durant.system")`; remove the inline constant; switch `[:max_text_chars]` to `truncate_with_token_check(...)`. Existing `_build_user_prompt` stays, but conditionally appends §4.5 role section. Audit row in `working/biographical_refs.json` extended with seal hashes + truncation metadata + subject_mentions_in_elided. **No interface change.** |
+| `src/dsar_pipeline/gates/gate_durant_recheck.py` | does not exist | **NEW:** `GateDurantRecheck(BaseGateAgent)` per §4.2. |
+| `src/dsar_pipeline/gates/prompt_loader.py` | does not exist | **NEW:** §4.1 loader. |
+| `src/dsar_pipeline/gates/text_truncation.py` | does not exist | **NEW:** §4.3 helper. |
+| `src/dsar_pipeline/gates/prompts/` | does not exist | **NEW directory.** Houses `durant.system.md`, `durant.recheck.system.md`, `_registry.json`, `_archive/<id>/<version>.md.gz`. (Sibling to `config/prompts/scope_check.txt`, which is unchanged — that's a different routing-role prompt.) |
+| `src/dsar_pipeline/scope_check_stage.py` | `ScopeCheckStage(BaseStage)` orchestrates `gate_temporal_scope ∥ gate_durant` via `GateRunner` → writes `scope_verdicts.jsonl` | **Extend:** after primary `gate_durant` runs, conditionally drive `RecheckStage` over the `work_context_only` refs. The synthesis call inside this stage now reads §4.2 recheck output before producing scope_verdicts. `ScopeCheckStage.summary_filename` unchanged; the toolkit-side `dsar-scope-check` CLI entry-point unchanged. |
+| `src/dsar_pipeline/recheck_stage.py` | does not exist | **NEW:** §4.2 stage subclassing `BaseStage`. `stage_label="durant_recheck"`. New entry in `VALID_STAGE_LABELS` (in `_stage_base.py`). |
+| `src/dsar_pipeline/agents/agent22_scope_check.py` | `_synthesise_verdict(durant, temporal)` 2-arg, returns `(verdict, rationale)` | **Extend:** `synthesise_verdict(primary, recheck, recheck_err, recheck_mode, temporal)` 5-arg returning `(scope, rationale, effective_durant)` per §4.6. Backwards-compat helper `_synthesise_verdict` retained as a thin shim for any out-of-tree callers; deprecation warning. |
+| `src/dsar_pipeline/llm_router.py` | `RoleRouter` with `call(role, system, user, …)` + per-call audit to `llm_calls.jsonl` | **Add method:** `RoleRouter.has_token_counter_for(model_alias) -> bool` and `RoleRouter.count_tokens(model_alias, text) -> int` for §4.3's safety belt. Cloud models (anthropic) use the SDK's `count_tokens`; local MLX returns `False` for now. No existing-caller break. |
+| `src/dsar_pipeline/config/model_context.json` | does not exist | **NEW** (under-`config/` already houses `llm_routing.yaml` etc.). §4.3 entries. |
+| `src/dsar_pipeline/config/pricing.json` | does not exist | **NEW.** §4.2 entries. |
+| `src/dsar_pipeline/schemas/durant_recheck_row.schema.json` | does not exist | **NEW.** §4.2 row schema (sibling to existing `scope_verdict.schema.json`). |
+| `src/dsar_pipeline/schemas/scope_verdict.schema.json` | exists; required keys: `ref, verdict, rationale, iteration, model, ts` | **Extend** the optional-properties block with `evidence.recheck_verdict`, `evidence.error_state`, `evidence.recheck_mode_effective`, `evidence.effective_durant`. Backwards-compat (existing rows still validate). |
+| `bin/build-prompt-registry`, `bin/check-prompt-assets`, `bin/build-vendored-zipapp` | do not exist | **NEW** scripts per §4.1. Sibling to existing `bin/` content. |
+| `pyproject.toml` `[project.scripts]` | `dsar-pipeline`, `dsar-signoff-console`, `dsar-session` | **Add:** `dsar-prompt = "dsar_pipeline.gates.prompt_loader:cli_main"`, `dsar-recheck = "dsar_pipeline.recheck_stage:main"`, `dsar-fitness-canary = "dsar_pipeline.fitness_canary:main"`. |
+| `tests/test_prompt_assets.py`, `tests/test_gate_durant_recheck.py`, `tests/test_text_truncation.py`, `tests/test_fitness_canary.py`, `tests/test_role_field_sanitiser.py` | none | **NEW** test files. (The spec body referred to `tests/gates/...`; toolkit convention is FLAT `tests/test_*.py` — match that.) Existing `test_gate_durant.py`, `test_durant_prompt_template.py`, `test_scope_decisions.py` should continue to pass unchanged. |
+| `examples/canary_baseline/` | does not exist | **NEW.** §4.4 baseline corpus + truth.json + canary_corpus.json. |
+
+**Note on existing `biographical_refs.json` vs the spec's `durant_verdicts.jsonl`:** `GateDurant._persist_verdicts()` currently writes a single `working/biographical_refs.json` with `{biographical, work_context_only, ambiguous, per_ref}`. The spec's design talks about `durant_verdicts.jsonl` (one row per ref). **Decision:** keep writing `biographical_refs.json` for backwards compat AND additionally emit a per-ref JSONL row (`working/durant_verdicts.jsonl`) shaped per the spec. Existing consumers of `biographical_refs.json` (notably `agent22_scope_check`'s legacy path) keep working; new consumers (recheck stage, agent22's new synthesis) read the JSONL. Migration of `biographical_refs.json` to a derived view is a follow-up.
+
+### 10.2 dsar-orchestrator changes
+
+| File | Current state | Change |
+|---|---|---|
+| `src/dsar_orchestrator/pipeline.py` | `STAGE_ORDER` includes `scope_classify`; `run()` runs stages with `StageBanner` + `PipelineAuditor` | **Insert pre-flight hook** before `STAGE_ORDER[0]`: if `cfg.fitness_check.enabled` (new field), call new `_run_fitness_preflight(cfg)`. Failure raises `PipelineHalt`. No change to `STAGE_ORDER` itself; recheck happens INSIDE the toolkit's `scope_check_stage`, transparent to the conductor. |
+| `src/dsar_orchestrator/config.py` | `CaseConfig` dataclass with `pii_classify_mode`, `rerank_mode`, … | **Add fields:** `fitness_check_enabled: bool = True`, `fitness_check_canary_path: Path | None = None`, `fitness_check_max_report_age_days: int = 30`, `force_skip_fitness_reason: str = ""`. All optional in the loaded YAML; defaults preserve current behaviour (fitness check ON by default, but an explicit miss is what aborts — operator can opt out via `force_skip_fitness_reason`). |
+| `src/dsar_orchestrator/cli.py` | `dsar-conductor --case X [--from] [--through] [--only]` | **Add subcommands:** convert the current flat parser to argparse subparsers (`run` is the default, preserving today's CLI: `dsar-conductor --case X` continues to work because `run` is the default subcommand). Add `dsar-conductor verify --check {prompt-versions,fitness-report} --case X [--strict]`. Add `--auto-fitness` and `--force-skip-fitness "<reason>"` flags on the `run` subcommand. |
+| `src/dsar_orchestrator/adapters/scope_classify.py` | shells out to `dsar-scope-check` CLI | **Unchanged.** The recheck happens inside the toolkit's stage; the adapter's contract (`scope_classify_complete.jsonl` cascade anchor) is unaffected. Adapter only changes if/when its retirement contract triggers (toolkit ships `run_for_case(case_path)`). |
+| `src/dsar_orchestrator/audit.py` | `PipelineAuditor`, `StageBanner` write `pipeline.jsonl` | **No change.** Fitness pre-flight gets its own `StageBanner("fitness_preflight")` so it appears in the audit. |
+| `src/dsar_orchestrator/verify.py` | does not exist | **NEW** module hosting `verify_prompt_versions(case_dir)` and `verify_fitness_report(case_dir)`. `cli.py`'s `verify` subcommand dispatches here. |
+| `tools/check_durant_doc.py`, `docs/durant-doc-lint.yaml` | do not exist | **NEW** per §4.7. Wired into orchestrator CI (`.github/workflows/...` or pre-commit). |
+
+**Note on `dsar-conductor verify`:** the design body talks about a flag `--check prompt-versions`. Implementation should use argparse subparsers since the orchestrator has no `verify` subcommand today. Form: `dsar-conductor verify --check prompt-versions --case <id>` (or `--case-root` analogue). Strict mode: `--strict` upgrades older-version warnings to fatal.
+
+### 10.3 Per-engagement scripts (not in either repo)
+
+Per-engagement bypass scripts live in `<engagement>/audit/` per the per-engagement data-isolation rule. **This spec does NOT edit them**; it makes the new tooling available for them to consume. Migration is engagement-by-engagement:
+
+1. Replace inline `DURANT_SYSTEM_PROMPT` copy with `subprocess.run(["dsar-prompt", "durant.system", "--strip-section", "placeholder-tokens"], ...)` (or `dsar-prompt-vendored.pyz` for non-installed deployments).
+2. Add runtime sha256 verification of the captured body against the footer's `effective_sha256`.
+3. Record `prompt_canonical_seal_sha256`, `prompt_applied_strips`, `prompt_effective_sha256`, `prompt_source` in audit rows.
+4. Where the bypass script also performed recheck: drop the local implementation and use `dsar-recheck` (or its vendored equivalent) which now reads the same prompt asset.
+
+Migration is documented in a separate engagement-script migration guide (out of scope for this spec; touched on in §4.7's `durant-test.md` §7 update).
+
+### 10.4 Integration acceptance tests
+
+Beyond unit tests per section, end-to-end integration tests should verify:
+
+- **`test_e2e_durant_with_recheck`** (tests/test_durant_pipeline_e2e.py — NEW): run `ScopeCheckStage` on a fixture case where the primary gate misclassifies 5 of 30 WCO docs as biographical-tail-only; assert recheck reclassifies them, and `scope_verdicts.jsonl` shows `scope_verdict=present` for those refs. Synthesis summary records `recheck_promoted: 5`.
+- **`test_e2e_fitness_preflight_aborts_run`** (tests/test_conductor_fitness_preflight.py — NEW orchestrator test): conductor with stale fitness report aborts before any stage runs; `pipeline.jsonl` records the abort.
+- **`test_e2e_prompt_drift_caught_by_conductor_verify`** (orchestrator test): produce a case with audit rows for an old prompt seal; `dsar-conductor verify --check prompt-versions` exits with WARN; `--strict` exits 2.
+- **`test_existing_test_gate_durant_unchanged`** (regression): the existing `tests/test_gate_durant.py` continues to pass without modification (proves we extended without breaking).
+
+### 10.5 Phasing — refined for integration
+
+Updated phased order accounting for the toolkit's actual layout:
+
+1. **Phase 1a — Loader + assets (toolkit, parallelisable internally):**
+   - `src/dsar_pipeline/gates/prompt_loader.py` (§4.1 Layers A+B).
+   - `src/dsar_pipeline/gates/prompts/durant.system.md` (verbatim extract from existing `gate_durant.py:DURANT_SYSTEM_PROMPT`, with v1.0.0 + seal).
+   - `bin/build-prompt-registry`, `_registry.json`, archive (§4.1 Layer D).
+   - CI: `tests/test_prompt_assets.py`.
+   - `pyproject.toml` adds `dsar-prompt` entry (§4.1 Layer C).
+   - `GateDurant._classify` refactored to use loader. `test_durant_prompt_template.py` continues to pass (assertions are about prompt body content, not the source).
+
+2. **Phase 1b — Truncation + role (toolkit, parallel to 1a):**
+   - `src/dsar_pipeline/gates/text_truncation.py` (§4.3).
+   - `src/dsar_pipeline/config/model_context.json`.
+   - `data_subject.json` JSON schema gains optional `role` + `role_context` (§4.5).
+   - `GateDurant._load_ref_text` swap to `truncate_with_token_check`. `GateDurant._build_user_prompt` conditionally emits role section.
+   - `RoleRouter.has_token_counter_for` + `count_tokens` added.
+
+3. **Phase 2 — Recheck stage (depends on 1a + 1b):**
+   - `prompts/durant.recheck.system.md`.
+   - `src/dsar_pipeline/gates/gate_durant_recheck.py` (§4.2).
+   - `src/dsar_pipeline/recheck_stage.py` + `dsar-recheck` CLI.
+   - `_stage_base.VALID_STAGE_LABELS` += `"durant_recheck"`.
+   - `scope_check_stage.py` extended to invoke `RecheckStage` after primary durant when configured.
+
+4. **Phase 3 — Synthesis (depends on Phase 2):**
+   - `agent22_scope_check.synthesise_verdict` 5-arg form (§4.6).
+   - Backwards-compat shim for `_synthesise_verdict` 2-arg form.
+   - `scope_verdict.schema.json` evidence-block extension.
+   - `tests/test_scope_decisions.py` extended for recheck branches.
+
+5. **Phase 4 — Canary + conductor pre-flight (depends on Phases 1–3):**
+   - `src/dsar_pipeline/fitness_canary.py` + `dsar-fitness-canary` CLI (§4.4).
+   - `examples/canary_baseline/` corpus.
+   - `dsar-orchestrator`: `CaseConfig` fields, `verify.py`, `_run_fitness_preflight` in pipeline.
+   - `cli.py` subparser conversion + `verify` subcommand.
+
+6. **Phase 5 — Doc + CI lint (continuous, per-PR for Phases 1–4):**
+   - `tools/check_durant_doc.py`, `durant-doc-lint.yaml` added in Phase 1a.
+   - `docs/durant-test.md` edits ship with the respective code PRs.
+
+### 10.6 Out-of-scope follow-ups surfaced by the integration review
+
+- **Migrate `biographical_refs.json` → `durant_verdicts.jsonl` as authoritative.** Today's `biographical_refs.json` aggregate is consumed by `gate_subject_preservation` and similar downstream gates per `gate_durant.py:7-15` docstring. A follow-up spec deprecates the aggregate (computed-view-only) once all consumers switch to the JSONL.
+- **Migrate `config/prompts/scope_check.txt` and `scope_check_strict.txt` to the seal-managed loader.** Those are a separate role (`scope_check` vs Durant's `scope_check` role-as-gate). Same pattern, separate effort.
+- **Toolkit's `dsar-scope-check` CLI ↔ orchestrator's `scope_classify` adapter retirement.** The adapter doc notes retirement when toolkit exposes `run_for_case(case_path)`. This spec doesn't trigger that; the recheck integration is internal to `scope_check_stage`.
+
+---
+
 *End of design v1.*
