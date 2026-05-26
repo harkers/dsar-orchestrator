@@ -6,6 +6,31 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-05-26
+
+### Added — dsar-pii-tagger-mini CLI promoted to conductor (#111 sub-5)
+
+- New `dsar_orchestrator.local_broker.pii_tagger_mini` + `dsar-pii-tagger-mini` CLI. Promoted from `audit/agent06-tagger.py`.
+- Local-broker PII tagger (model alias `mini`) producing toolkit-compatible `<case-root>/working/<ref>_tags.json` files (schema matches `dsar_pipeline.detect.py`), then consumed unchanged by the toolkit's `agent06_redaction`.
+- LLM entity detection + deterministic regex layer (email / UK phone / NI number). Per-doc pipeline merges both layers, dedupes by `(start, end, text)`.
+- Classification precedence (highest-priority first):
+  1. `subject_protected_phrases` match → `data_subject`, never redact
+  2. subject identifier match (name tokens > 2 chars + aliases + emails) → `data_subject`, never redact
+  3. LLM said `data_subject` → never redact
+  4. LLM said `third_party` → redact
+  5. LLM said `organisation` → `flag`
+  6. anything else → `unknown` / `flag`
+- Regex-detected emails/phones/NINOs default to `third_party` redact=True unless preserved by the rules above.
+- Same case-root parameterisation + retry-with-backoff + canonical-only dedupe-filter handling as the other promoted scripts.
+- Filter source: `scope_verdicts.jsonl` (Durant-canonical) preferred; falls back to `responsiveness_decisions.jsonl::disposition=included` with a warning if absent. Logs the `present∧excluded` discrepancy set so the operator can audit which Durant-positive items the responsiveness layer would have dropped.
+- 19 broker-free tests in `tests/test_pii_tagger_mini.py` covering `_subject_identifier_set` (name token expansion, short-token guard), `_protected_phrases_set` lowercasing, `_find_all_spans` (case-insensitive, non-overlapping, empty needle), `_regex_layer` (email/phone/NINO detection), `_classify_entity` precedence (protected wins over LLM, subject ID wins over LLM, all six paths), `build_tags_for_doc` (LLM+regex merge with broker monkeypatched, short-entity drop, multi-span dedupe), `run()` end-to-end (processes included, skips already-done, returns 1 on missing inputs).
+- Hermetic count: 464 passing (was 445; +19).
+- Version: pre-1.0 PATCH.
+
+### Followups
+
+- 1 promotion remaining under #111: calibration_portal.
+
 ## [0.9.4] - 2026-05-26
 
 ### Added — dsar-context-classify-mini CLI promoted to conductor (#111 sub-4)
