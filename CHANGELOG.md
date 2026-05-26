@@ -6,6 +6,19 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-26
+
+### Added — hash-chained audit emission on operator-console decisions
+
+- New `dsar_orchestrator.local_broker.audit_chain` module wrapping `dsar_pipeline.audit.FileAuditStore.append_event`. Three call sites — `leak_review.record_decision`, `unextractable.record_decision`, `operator_console.toggle_blocker_resolved` — now emit a hash-chained `REVIEWER_DECISION_MADE` event under `<case>/working/audit_events.jsonl` *before* appending to the user-visible decision JSONL.
+- **Chain-first ordering:** if the chain emit raises (schema or IO failure), the JSONL row is NOT written. Prevents JSONL/chain drift in the no-emit direction. Reverse-direction drift (chain succeeds, JSONL append then fails) is documented in `audit_chain.py` and left for a follow-up compensating event.
+- `resolve_case_id(case_dir)` reads `working/data_subject.json::case_no` (or `case_id`); logs a warning and falls back to `case_dir.name` if missing, malformed, or empty.
+- `_EMIT_LOCK` (in-process) + `fcntl.flock` (cross-process advisory lock on `audit_events.jsonl`) guard the read-prev/write-event sequence. Toolkit-side `append_event` callers (e.g. redaction agents) do not yet flock — see audit_chain.py docstring.
+- `/api/blocker/toggle` route handler now wraps `toggle_blocker_resolved` in try/except so chain emit failures surface via `_LAST_ACTION_RESULT` (parity with leak-review and unextractable routes).
+- 14 new tests in `tests/test_audit_chain.py` cover: first-event prev_hash null, multi-event chain integrity, returned canonical hash, case_id resolution from data_subject.json, fallback to dir name, malformed JSON, null case_no, item_id propagation, chain emission per call site, 20-thread concurrent emit, chain-first invariant (emit failure blocks JSONL write), and end-to-end blocker-toggle ordering.
+- Hermetic count: 334 passing (was 320; +14).
+- Version: pre-1.0 PATCH (additive; no API breakage).
+
 ## [0.6.0] - 2026-05-26
 
 ### Added — operator console v2 (web UI) + local_broker helpers

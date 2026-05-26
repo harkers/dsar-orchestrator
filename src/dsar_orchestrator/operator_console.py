@@ -423,6 +423,20 @@ def toggle_blocker_resolved(
 ) -> dict:
     state = load_console_state(ctx)
     bks = state.setdefault("resolved_blockers", {})
+    # Chain-first: if schema/IO breaks, state file isn't written either.
+    from dsar_orchestrator.local_broker.audit_chain import emit_for_case_dir
+
+    emit_for_case_dir(
+        ctx.case_dir,
+        decision_kind="blocker_toggle",
+        payload={
+            "ts": _iso_now(),
+            "blocker_id": blocker_id,
+            "resolved": resolved,
+            "note": note,
+        },
+        item_id=blocker_id,
+    )
     if resolved:
         bks[blocker_id] = {"resolved_at": _iso_now(), "note": note}
     else:
@@ -1977,9 +1991,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             resolved = form.get("resolved") == "1"
             note = form.get("note", "")
             if bid:
-                toggle_blocker_resolved(ctx, bid, resolved=resolved, note=note)
+                try:
+                    toggle_blocker_resolved(ctx, bid, resolved=resolved, note=note)
+                    _LAST_ACTION_RESULT = None
+                except Exception as exc:
+                    _LAST_ACTION_RESULT = {
+                        "rc": 2,
+                        "stdout": "",
+                        "stderr": f"{type(exc).__name__}: {exc}",
+                        "command": f"toggle_blocker_resolved({bid!r}, resolved={resolved})",
+                    }
+            else:
+                _LAST_ACTION_RESULT = None
             target = "/blockers"
-            _LAST_ACTION_RESULT = None
         elif url.path == "/api/summarise-stage":
             stage = form.get("stage", "")
             if stage in STAGES:
