@@ -890,6 +890,45 @@ def _decision_hero(state: dict, ctx: CaseContext, summary: dict) -> str:
     )
 
 
+def _action_queue_html(ctx: CaseContext, state: dict) -> str:
+    """Top-5 scored action items + 'Next Best Review' deep-link."""
+    from dsar_orchestrator.local_broker.action_queue import scored_queue
+
+    queue = scored_queue(ctx.case_dir, state)
+    if not queue:
+        return ""
+    top = queue[0]
+    rows: list[str] = []
+    for i, s in enumerate(queue[:5], start=1):
+        bd = s.breakdown
+        sla_txt = (
+            f"{bd['sla_days_remaining']}d to deadline"
+            if bd["sla_days_remaining"] is not None
+            else "—"
+        )
+        rows.append(
+            f"<tr>"
+            f"<td>{i}</td>"
+            f"<td><span class='pill'>{html.escape(s.item.kind)}</span></td>"
+            f"<td><a href='{html.escape(s.item.detail_url)}'>{html.escape(s.item.label[:80])}</a></td>"
+            f"<td>{s.score:.2f}</td>"
+            f"<td><span class='meta' style='font-size:11px;'>risk {bd['risk']}/10 · {sla_txt}"
+            f" · stage-pos {bd['stage_position']} · fatigue −{bd['fatigue_penalty']:.2f}"
+            f" · div +{bd['diversity_bonus']:.2f}</span></td>"
+            f"</tr>"
+        )
+    return (
+        "<div class='card'>"
+        "<h2>Action queue</h2>"
+        f"<p>{len(queue)} pending decision(s). Sorted by risk × SLA × stage × fatigue × diversity.</p>"
+        f"<p><a class='btn btn-primary' href='{html.escape(top.item.detail_url)}'>Next Best Review → "
+        f"{html.escape(top.item.kind)}: {html.escape(top.item.label[:60])}</a></p>"
+        "<table><thead><tr><th>#</th><th>Kind</th><th>Item</th><th>Score</th><th>Why</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        "</div>"
+    )
+
+
 def render_landing(ctx: CaseContext, state: dict, action_result: dict | None) -> str:
     meta = load_case_metadata(ctx)
     nums = pipeline_summary_numbers(ctx)
@@ -900,6 +939,7 @@ def render_landing(ctx: CaseContext, state: dict, action_result: dict | None) ->
 {_phase_strip(state)}
 {_action_result_html(action_result)}
 {_decision_hero(state, ctx, nums)}
+{_action_queue_html(ctx, state)}
 
 <div class='card'>
 <h2>Pipeline summary</h2>

@@ -6,6 +6,25 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-26
+
+### Added — multi-factor action queue + Next Best Review
+
+- New `dsar_orchestrator.local_broker.action_queue` module:
+  - `collect_pending_actions(case_dir, state)` — pulls unresolved blockers, failed leak redactions, and pending unextractable items from existing JSONL sources. Filters out future-phase items (stage-rail enforcement is the source of truth).
+  - `score_action(item, state, case_dir, *, recent_decisions)` — five-factor score per the jury synthesis: `0.40·risk + 0.30·sla + 0.15·stage_position − 0.10·fatigue + 0.05·diversity`. Recent decisions read from the hash-chained `audit_events.jsonl` (REVIEWER_DECISION_MADE events).
+  - `scored_queue(case_dir, state)` — collect + score + sort descending.
+  - `next_best_review(case_dir, state)` — top-scored item, or `None`.
+- SLA proximity uses `working/data_subject.json::request_received_date` against the UK GDPR Art 15 30-day window; neutral 0.5 when no SLA data.
+- Landing page gains an "Action queue" card showing the top 5 items + score breakdown (`risk 8/10 · 12d to deadline · stage-pos 1 · fatigue −0.33 · div +1.0`) and a "Next Best Review →" deep-link to the top item's screen.
+- 12 new tests in `tests/test_action_queue.py` covering collection per source, resolved-item filtering, phase filtering, score ordering by risk + SLA, fatigue penalty after streak, diversity bonus after off-kind streak, next-best pick, empty-queue case, breakdown shape.
+- Hermetic count: 383 passing (was 371; +12).
+- Version: pre-1.0 MINOR (additive subsystem).
+
+### Followups
+
+- Cache scored_queue between renders if performance degrades at scale (current per-render cost is tiny; revisit when item count > 1k).
+
 ## [0.7.1] - 2026-05-26
 
 ### Added — stage-rail enforcement on operator-console GET routes
