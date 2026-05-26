@@ -154,3 +154,39 @@ def test_subject_identifier_from_dict_parses_fields() -> None:
     assert si.dob == "1985-03-12"
     assert si.aliases == ["Jim"]
     assert si.disambiguation_notes == "Not James Marshall."
+
+
+# ─── Phase 5 model-fitness canary fields (spec §10.2) ───
+
+
+def test_case_config_fitness_check_fields_default(tmp_path):
+    """CaseConfig has fitness_check_* fields with safe defaults."""
+    case_dir = tmp_path / "case_default"
+    case_dir.mkdir()
+    (case_dir / "case_config.json").write_text(
+        '{"case_no": "TEST", "case_scope": "x"}', encoding="utf-8"
+    )
+    cfg = load_case_config("TEST", case_root=case_dir)
+    assert cfg.fitness_check_enabled is True
+    assert cfg.fitness_check_canary_path is None
+    assert cfg.fitness_check_max_report_age_days == 30
+    assert cfg.force_skip_fitness_reason == ""
+
+
+def test_case_config_fitness_check_fields_from_yaml(tmp_path):
+    """All 4 fitness_check_* fields read from case_config.json."""
+    case_dir = tmp_path / "case_custom"
+    case_dir.mkdir()
+    (case_dir / "case_config.json").write_text(
+        '{"case_no": "TEST", "case_scope": "x", '
+        '"fitness_check_enabled": false, '
+        '"fitness_check_canary_path": "/tmp/canary", '
+        '"fitness_check_max_report_age_days": 7, '
+        '"force_skip_fitness_reason": "operator pilot run"}',
+        encoding="utf-8",
+    )
+    cfg = load_case_config("TEST", case_root=case_dir)
+    assert cfg.fitness_check_enabled is False
+    assert cfg.fitness_check_canary_path == Path("/tmp/canary")
+    assert cfg.fitness_check_max_report_age_days == 7
+    assert cfg.force_skip_fitness_reason == "operator pilot run"

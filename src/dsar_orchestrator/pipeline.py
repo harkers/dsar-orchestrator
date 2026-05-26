@@ -14,9 +14,12 @@ actually run against a case that needs the missing toolkit module.
 
 from __future__ import annotations
 
+import getpass
+import hashlib
 import importlib
 import json
 import os
+import socket
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -418,6 +421,233 @@ def _run_export(cfg: CaseConfig) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
+# Phase 5 — fitness pre-flight (spec §4.4 F)
+# ─────────────────────────────────────────────────────────────────
+
+
+def _compute_inference_params_sha256(cfg: CaseConfig) -> str:
+    """Canonicalised hash of the inference params that affect Durant
+    classification — model alias + truncation cap. Used in the
+    fitness-report lookup tuple."""
+    params = {
+        "model_alias": getattr(cfg, "model_alias", "claude-opus-4-7@anthropic"),
+        "max_text_chars": getattr(cfg, "max_text_chars", 32000),
+    }
+    canonical = json.dumps(params, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _find_matching_report(
+    *,
+    report_dir: Path,
+    deployment_id: str,
+    model_alias: str,
+    primary_seal: str,
+    recheck_seal: str | None,
+    live_corpus_sha: str,
+    inference_params_sha: str,
+    max_age_days: int,
+) -> tuple[dict | None, str | None]:
+    """Search ``report_dir`` for the most-recent report whose tuple matches.
+
+    Returns ``(report_dict, fail_reason)``. On a clean match:
+    ``(report, None)``. On no match: ``(None, "<reason>")``.
+    """
+    deploy_dir = report_dir / deployment_id
+    if not deploy_dir.is_dir():
+        return None, f"no reports directory at {deploy_dir}"
+    candidates: list[tuple[datetime, dict, Path]] = []
+    for rp in sorted(deploy_dir.glob("*.json")):
+        try:
+            r = json.loads(rp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if r.get("deployment_id") != deployment_id:
+            continue
+        if r.get("model_alias") != model_alias:
+            continue
+        if r.get("primary_prompt_seal_sha256") != primary_seal:
+            continue
+        if r.get("recheck_prompt_seal_sha256") != recheck_seal:
+            continue
+        # Older reports may not carry inference_params_sha256; accept
+        # missing (None) but enforce match when present.
+        if r.get("inference_params_sha256") not in (None, inference_params_sha):
+            continue
+        try:
+            gen_dt = datetime.fromisoformat(r["generated_at"])
+        except (KeyError, ValueError):
+            continue
+        candidates.append((gen_dt, r, rp))
+
+    if not candidates:
+        return None, "no fitness report matching tuple"
+
+    candidates.sort(reverse=True, key=lambda t: t[0])
+    gen_dt, latest, _ = candidates[0]
+    age_days = (datetime.now(timezone.utc) - gen_dt).total_seconds() / 86400.0
+    if age_days > max_age_days:
+        return None, f"latest report is stale ({age_days:.1f}d > {max_age_days}d)"
+    if latest.get("live_corpus_sha256") != live_corpus_sha:
+        return None, (
+            f"corpus_sha256 drift: report="
+            f"{(latest.get('live_corpus_sha256') or '')[:16]}… "
+            f"live={live_corpus_sha[:16]}…"
+        )
+    if not latest.get("passed", False):
+        fails = latest.get("fails", [])
+        detail = "; ".join(f"{f.get('kind')}: {f.get('code')}" for f in fails) or "unknown"
+        return None, f"fitness failed: {detail}"
+    return latest, None
+
+
+def _write_skip_fitness_audit(case_path: Path, *, reason: str, fitness_tuple: dict) -> None:
+    """Atomic write of case_audit/skip_fitness.json with the bypass record."""
+    audit_dir = case_path / "case_audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "reason": reason,
+        "os_user": getpass.getuser(),
+        "hostname": socket.gethostname(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "fitness_tuple": fitness_tuple,
+        "last_known_report_id": None,
+    }
+    path = audit_dir / "skip_fitness.json"
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _run_fitness_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §4.4 (F). Pre-flight gate before ``STAGE_ORDER[0]``.
+
+    No-op when ``cfg.fitness_check_enabled`` is False. Halts with
+    :class:`PipelineHalt` on missing/stale/failing/drift reports.
+    Force-skip via ``cfg.force_skip_fitness_reason`` records an audit
+    row + proceeds.
+    """
+    if not cfg.fitness_check_enabled:
+        auditor.note("fitness_preflight", "fitness_check disabled by config")
+        return
+
+    with StageBanner(auditor, "fitness_preflight"):
+        # Force-skip path: audit + proceed.
+        if cfg.force_skip_fitness_reason.strip():
+            cfg_raw = json.loads((cfg.case_path / "case_config.json").read_text(encoding="utf-8"))
+            deployment_id = cfg_raw.get("fitness_check_deployment_id") or ""
+            fitness_tuple = {
+                "deployment_id": deployment_id,
+                "model_alias": getattr(cfg, "model_alias", "claude-opus-4-7@anthropic"),
+            }
+            _write_skip_fitness_audit(
+                cfg.case_path,
+                reason=cfg.force_skip_fitness_reason.strip(),
+                fitness_tuple=fitness_tuple,
+            )
+            auditor.note(
+                "fitness_preflight",
+                f"force_skip_fitness: {cfg.force_skip_fitness_reason!r}",
+            )
+            return
+
+        cfg_raw = json.loads((cfg.case_path / "case_config.json").read_text(encoding="utf-8"))
+        deployment_id = cfg_raw.get("fitness_check_deployment_id") or ""
+        if not deployment_id:
+            raise PipelineHalt(
+                f"case={cfg.case_no}: fitness_check_enabled but "
+                f"`fitness_check_deployment_id` missing in case_config.json. "
+                f"Either set it, set fitness_check_enabled=false, "
+                f'or pass --force-skip-fitness "<reason>".'
+            )
+
+        canary_override = os.environ.get("DSAR_CANARY_PATH_OVERRIDE")
+        canary_path = (
+            Path(canary_override)
+            if canary_override
+            else (
+                cfg.fitness_check_canary_path
+                or Path.home() / ".dsar" / "canary_sets" / deployment_id
+            )
+        )
+        if not canary_path.is_dir():
+            raise PipelineHalt(
+                f"case={cfg.case_no}: canary set path not found: {canary_path}. "
+                f"Run `dsar-fitness-canary --deployment-id {deployment_id}` "
+                f"first or pass --auto-fitness."
+            )
+
+        # Compute live corpus sha — surface ValueError as a halt.
+        from dsar_pipeline.canary_corpus import compute_corpus_sha256
+
+        try:
+            live_corpus_sha = compute_corpus_sha256(canary_path)
+        except ValueError as e:
+            raise PipelineHalt(f"case={cfg.case_no}: canary corpus invalid: {e}") from e
+
+        # Resolve prompt seals.
+        try:
+            from dsar_pipeline.gates.prompt_loader import PromptLoader
+
+            primary_seal = PromptLoader.load("durant.system").canonical_seal_sha256
+            try:
+                recheck_seal = PromptLoader.load("durant.recheck.system").canonical_seal_sha256
+            except Exception:
+                recheck_seal = None
+        except ImportError as e:
+            raise PipelineHalt(
+                f"case={cfg.case_no}: dsar-toolkit not installed for fitness pre-flight: {e}"
+            ) from e
+
+        model_alias = getattr(cfg, "model_alias", "claude-opus-4-7@anthropic")
+        inference_params_sha = _compute_inference_params_sha256(cfg)
+
+        report_root = Path(
+            os.environ.get(
+                "DSAR_FITNESS_REPORT_ROOT",
+                str(Path.home() / ".dsar" / "fitness_reports"),
+            )
+        )
+
+        report, fail_reason = _find_matching_report(
+            report_dir=report_root,
+            deployment_id=deployment_id,
+            model_alias=model_alias,
+            primary_seal=primary_seal,
+            recheck_seal=recheck_seal,
+            live_corpus_sha=live_corpus_sha,
+            inference_params_sha=inference_params_sha,
+            max_age_days=cfg.fitness_check_max_report_age_days,
+        )
+        if report is None:
+            reason = fail_reason or ""
+            # Tailor the leading phrase so tests + operators can match precisely.
+            if "no fitness report" in reason or "no reports directory" in reason:
+                leading = "no fitness report"
+            elif "stale" in reason:
+                leading = "stale"
+            elif "drift" in reason:
+                leading = "drift"
+            else:
+                leading = "fitness failed"
+            raise PipelineHalt(
+                f"case={cfg.case_no}: fitness pre-flight halt: "
+                f"{leading} ({fail_reason}). "
+                f"Run `dsar-fitness-canary --deployment-id {deployment_id}`, "
+                f"or pass --auto-fitness on the conductor."
+            )
+
+        auditor.note(
+            "fitness_preflight",
+            f"report_id={report.get('report_id')} passed=True age_ok corpus_ok",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
 # The orchestrator entry point
 # ─────────────────────────────────────────────────────────────────
 
@@ -489,6 +719,11 @@ def run(
         audit.mark_skipped(stage, reason)
 
     try:
+        # Phase 5 (spec §4.4): fitness pre-flight. Halts BEFORE any
+        # stage runs if the model is not certified fit. Skipped when
+        # cfg.fitness_check_enabled is False.
+        _run_fitness_preflight(cfg, audit)
+
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):
             with StageBanner(audit, "ingest"):

@@ -96,6 +96,28 @@ class CaseConfig:
     # DSAR_RESOLVE_FLAGS_AS env var. See dsar-orchestrator#26.
     resolve_flags_as: str | None = None
 
+    # Phase 5 — model-fitness canary pre-flight (spec §4.4 + §10.2).
+    #
+    # YAML schema (all keys optional; defaults preserve current behaviour):
+    #
+    #   {
+    #     ...,
+    #     "fitness_check_enabled": true,          # default true; gate is ON
+    #     "fitness_check_canary_path": null,      # default ~/.dsar/canary_sets/<deployment_id>
+    #     "fitness_check_max_report_age_days": 30,
+    #     "force_skip_fitness_reason": ""          # non-blank string bypasses + audits
+    #   }
+    #
+    # The pre-flight halts the run if a matching fresh+passing fitness
+    # report does not exist. Operators can:
+    #   - opt out per-case via `fitness_check_enabled: false`
+    #   - bypass with audit via `force_skip_fitness_reason: "<reason>"` (non-blank)
+    #   - run the canary inline via the CLI's `--auto-fitness` flag
+    fitness_check_enabled: bool = True
+    fitness_check_canary_path: Path | None = None
+    fitness_check_max_report_age_days: int = 30
+    force_skip_fitness_reason: str = ""
+
 
 def _read_override_file(name: str) -> str | None:
     """Read the contents of a ~/.dsar-<name>-mode file, if present."""
@@ -186,6 +208,14 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
         resolve_flags_as=_normalise_resolve_flags(
             os.environ.get("DSAR_RESOLVE_FLAGS_AS", raw.get("resolve_flags_as"))
         ),
+        fitness_check_enabled=bool(raw.get("fitness_check_enabled", True)),
+        fitness_check_canary_path=(
+            Path(raw["fitness_check_canary_path"]).expanduser()
+            if raw.get("fitness_check_canary_path")
+            else None
+        ),
+        fitness_check_max_report_age_days=int(raw.get("fitness_check_max_report_age_days", 30)),
+        force_skip_fitness_reason=str(raw.get("force_skip_fitness_reason", "")),
     )
     return cfg
 
