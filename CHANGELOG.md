@@ -6,6 +6,23 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-05-26
+
+### Added — dsar-durant-recheck CLI promoted to conductor (#111 sub-3)
+
+- New `dsar_orchestrator.local_broker.durant_recheck` + `dsar-durant-recheck` CLI. Promoted from `audit/agent-durant-recheck.py`.
+- Under-disclosure safety net: for every doc the Durant pass marked `work_context_only`, asks the broker the inverse question. Three recheck verdicts: `confirmed_work_context_only` / `reclassify_to_biographical` / `reclassify_to_ambiguous`.
+- **Confirmation-bias guard:** the original Durant rationale is kept in the audit record but NOT shown to the model — the recheck assesses each doc on its own merits.
+- **Under-disclosure-conservative default:** unknown / malformed verdicts default to `reclassify_to_ambiguous` (escalation), never to `confirmed_work_context_only`. "I'm not sure" must escalate, never silently agree.
+- Same case-root parameterisation, resume-safe atomic cleanup, retry-with-backoff, and canonical-only dedupe-filter handling as `durant_pass`.
+- 10 broker-free tests in `tests/test_durant_recheck.py` covering module surface, case-root resolution, `recheck_one` happy / unknown-verdict-defaults-to-ambiguous / confirmation-bias-guard / network-error paths, excluded-refs filter (only `work_context_only` rows), `run()` end-to-end (processes excluded only, skips biographical-orig docs, skips already-rechecked, returns 1 on missing inputs).
+- Hermetic count: 433 passing (was 423; +10).
+- Version: pre-1.0 PATCH.
+
+### Followups
+
+- 3 promotions remaining under #111: agent04-mini, agent06-tagger, calibration_portal.
+
 ## [0.9.2] - 2026-05-26
 
 ### Added — dsar-durant-pass CLI promoted to conductor (#111 sub-2)
