@@ -6,6 +6,22 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-26
+
+### Added — dsar-approver CLI promoted to conductor (#111 sub-1)
+
+- New `dsar_orchestrator.local_broker.dsar_approver` module + `dsar-approver` CLI script entry. Promoted from the per-case `audit/dsar-approver.py` so the script no longer lives in the encrypted sparse bundle alongside subject data (per the "nothing not related to the data subject in that volume" rule).
+- Case-root parameterised via `--case-root` flag, `DSAR_CASE_ROOT` env var, or cwd (in that priority). Audit log appends to `<case-root>/audit/approver-decisions.jsonl`.
+- Module exports `review(case_id, package, *, case_root=None)` for programmatic use; `_VALIDATOR` exposes the published JSON schema.
+- 13 broker-free tests in `tests/test_dsar_approver.py` covering schema validation (acceptance + rejection of bad enums), case-root resolution priority, audit-log path resolution, broker monkeypatch happy + failure paths (invalid JSON, schema failure, empty content), and CLI plumbing (`--help`, missing-case-id error).
+- Hermetic count: 410 passing (was 397; +13).
+- Version: pre-1.0 PATCH (additive subsystem + CLI script).
+
+### Followups
+
+- Promote remaining 5 case-side scripts under #111 (one PR each): agent-durant, agent-durant-recheck, agent04-mini, agent06-tagger, calibration_portal.
+- After all 6 promotions land, #112 deletes the originals from `/Volumes/propharma/cases/<case>/audit/`.
+
 ## [0.9.0] - 2026-05-26
 
 ### Added — 30-doc QA stratified sample + completion gate
