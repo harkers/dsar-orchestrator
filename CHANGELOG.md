@@ -6,6 +6,24 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-05-26
+
+### Added — dsar-durant-calibration CLI promoted to conductor (#111 sub-6, completes #111)
+
+- New `dsar_orchestrator.local_broker.durant_calibration` + `dsar-durant-calibration` CLI. Promoted from `audit/calibration_portal.py`.
+- Operator-calibration web portal validating the Durant verdict quality (distinct from `qa_sample` which validates redaction quality). Stratified 30-doc sample: 10 disputed + 10 agreed-exclude + 5 recheck-ambiguous + 5 originally-biographical.
+- Subject name auto-resolved from `data_subject.json::full_name` (was hardcoded in the case-side script). Falls back to case dir name.
+- Decisions are append-only with latest-wins read semantics; full click history preserved at `<case-root>/working/operator_calibration_30.jsonl`.
+- Agreement report computes operator vs original-Durant + operator vs recheck rates per stratum and overall.
+- Same case-root parameterisation as the other promoted scripts. ThreadingHTTPServer + `make_handler(case_root, sample)` closes over per-case state cleanly (was a class variable in the case-side script).
+- 12 broker-free tests in `tests/test_durant_calibration.py` covering module surface (sums to 30), case-root resolution, subject-name resolution + fallback, normalisation helpers (op/durant/recheck → include/exclude/uncertain), stratum picking (proper counts when pool exceeds want, under-samples when pool < want, deterministic with default seed), append-only decision persistence + latest-wins, agreement report (no-sample / has-sample / counts match).
+- Hermetic count: 476 passing (was 464; +12).
+- Version: pre-1.0 PATCH.
+
+### #111 status
+
+All 6 promotions complete. Next: #112 deletes the originals from `/Volumes/propharma/cases/<case>/audit/`.
+
 ## [0.9.5] - 2026-05-26
 
 ### Added — dsar-pii-tagger-mini CLI promoted to conductor (#111 sub-5)
