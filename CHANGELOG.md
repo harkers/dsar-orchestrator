@@ -6,6 +6,23 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-26
+
+### Added — dsar-durant-pass CLI promoted to conductor (#111 sub-2)
+
+- New `dsar_orchestrator.local_broker.durant_pass` module + `dsar-durant-pass` CLI script entry. Promoted from the per-case `audit/agent-durant.py`.
+- Applies the Durant v FSA biographical-focus test to every ingested doc via mlx-broker (model alias `mini`). Output lands at `<case-root>/working/durant_verdicts.jsonl`; per-50-doc progress at `<case-root>/audit/durant-progress.jsonl`.
+- Case-root parameterised via `--case-root` / `DSAR_CASE_ROOT` / cwd. `INCLUDE_DUPLICATES=1` opts out of the canonical-only dedupe filter.
+- Resume-safe: drops errored rows (`error_state` present) atomically before rerun; skips already-classified refs.
+- Retry-with-backoff (2/8/30/60s) on HTTP 500 / connection errors / timeouts; JSON-parse and verdict-enum failures do NOT retry — they're recorded as `error_state` rows and re-processed on next run.
+- 13 broker-free tests in `tests/test_durant_pass.py` covering module surface, case-root resolution, `_strip_fences`, `classify_one` happy + invalid-verdict + empty-content + bad-JSON + network-error paths, resume cleanup (drops errored rows), and `run()` end-to-end with broker monkeypatched (processes all, skips already-classified, returns 1 on missing inputs).
+- Hermetic count: 423 passing (was 410; +13).
+- Version: pre-1.0 PATCH (additive subsystem + CLI script).
+
+### Followups
+
+- 4 promotions remaining under #111: agent-durant-recheck, agent04-mini, agent06-tagger, calibration_portal.
+
 ## [0.9.1] - 2026-05-26
 
 ### Added — dsar-approver CLI promoted to conductor (#111 sub-1)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsar-orchestrator"
-version = "0.9.1"
+version = "0.9.2"
 description = "Orchestrator for the harkers/dsar-toolkit modular DSAR processing stack"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +42,7 @@ dsar-analyse-logs = "dsar_orchestrator.log_analyser.cli:main"
 dsar-synthesize-case = "dsar_orchestrator.synthesis.cli:main"
 dsar-operator-console = "dsar_orchestrator.operator_console:main"
 dsar-approver = "dsar_orchestrator.local_broker.dsar_approver:main"
+dsar-durant-pass = "dsar_orchestrator.local_broker.durant_pass:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
