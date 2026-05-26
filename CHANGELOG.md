@@ -6,6 +6,22 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-26
+
+### Added — 30-doc QA stratified sample + completion gate
+
+- New `dsar_orchestrator.local_broker.qa_sample` module:
+  - `sample_for_qa(case_dir, *, size=30, seed=42, force=False)` — picks `size` redacted docs stratified into three buckets per the jury synthesis: 10 high entity_count + 10 medium + 10 random. Persists to `audit/qa_sample.jsonl` on first call; subsequent calls return the persisted sample. `force=True` discards and re-picks against the current corpus.
+  - `list_qa_sample(case_dir)` — sample rows enriched with the latest decision per `doc_ref`.
+  - `record_qa_decision(case_dir, *, doc_ref, decision, reason_code, note)` — chain-first (same pattern as leak_review / unextractable). Decisions: `approve` / `request_reredaction` / `mark_false_positive` / `mark_missed_redaction` / `escalate`. `reason_code` validated against the R001-R010 taxonomy from #105.
+  - `qa_sample_complete(case_dir)` — `True` iff every sampled doc has a non-pending decision.
+  - `summary_counts(case_dir)` — page-header headline numbers.
+- New `/qa-sample` GET + `/api/qa-sample/decide` POST. Page shows bucket badge (HIGH/MED/RAND), entity + redaction counts, decision form per doc, and a stage-complete banner once every doc has a final decision.
+- `/qa-sample` added to `ROUTE_REQUIRED_PHASE` (min phase = redact).
+- 14 new tests in `tests/test_qa_sample.py` covering sample size (default 30, smaller corpus), stratification (10/10/10), high bucket has higher avg entity count than medium, persistence + idempotent re-read, `force=True` reset, status filter (only `redacted`), decision validation (reason_code required, unknown decision rejected), chain emission on decide, completion check (no-sample / partial / complete), and decision status enrichment for the UI.
+- Hermetic count: 397 passing (was 383; +14).
+- Version: pre-1.0 MINOR (additive subsystem + new route).
+
 ## [0.8.0] - 2026-05-26
 
 ### Added — multi-factor action queue + Next Best Review

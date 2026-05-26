@@ -356,6 +356,7 @@ _PHASE_INDEX = {p["key"]: i for i, p in enumerate(PHASES)}
 ROUTE_REQUIRED_PHASE: dict[str, str] = {
     "/unextractable": "discovery",
     "/leak-review": "redact",
+    "/qa-sample": "redact",
     "/blockers": "release",
     "/release-check": "release",
     "/closure-letter": "release",
@@ -1726,6 +1727,93 @@ def render_closure_letter(ctx: CaseContext) -> str:
 </body></html>"""
 
 
+def render_qa_sample(ctx: CaseContext, action_result: dict | None) -> str:
+    """30-doc QA sample table with per-doc decision form."""
+    from dsar_orchestrator.local_broker.qa_sample import (
+        list_qa_sample,
+        qa_sample_complete,
+        summary_counts,
+    )
+
+    meta = load_case_metadata(ctx)
+    rows = list_qa_sample(ctx.case_dir)
+    counts = summary_counts(ctx.case_dir)
+    complete = qa_sample_complete(ctx.case_dir)
+    bucket_pill = {
+        "high": "<span class='pill fail'>HIGH</span>",
+        "medium": "<span class='pill warn'>MED</span>",
+        "random": "<span class='pill np'>RAND</span>",
+    }
+    decision_pill = {
+        "pending": "<span class='pill np'>Pending</span>",
+        "approve": "<span class='pill ok'>Approved</span>",
+        "request_reredaction": "<span class='pill warn'>Re-redact requested</span>",
+        "mark_false_positive": "<span class='pill warn'>False positive</span>",
+        "mark_missed_redaction": "<span class='pill fail'>Missed redaction</span>",
+        "escalate": "<span class='pill fail'>Escalated</span>",
+    }
+    table_rows: list[str] = []
+    for r in rows:
+        ref = html.escape(r["doc_ref"])
+        form = (
+            "<form method='POST' action='/api/qa-sample/decide' style='display:inline;'>"
+            f"<input type='hidden' name='doc_ref' value='{ref}'>"
+            "<select name='decision' required style='margin-right:4px;'>"
+            "<option value=''>— decision —</option>"
+            "<option value='approve'>Approve</option>"
+            "<option value='request_reredaction'>Request re-redaction</option>"
+            "<option value='mark_false_positive'>Mark false positive</option>"
+            "<option value='mark_missed_redaction'>Mark missed redaction</option>"
+            "<option value='escalate'>Escalate</option>"
+            "</select>"
+            f"{_reason_code_select_html()}"
+            "<input type='text' name='note' placeholder='note (required for R006/R010/R-PENDING)' style='width:200px;'>"
+            "<button class='btn btn-primary' type='submit'>Record</button>"
+            "</form>"
+        )
+        rc_badge = (
+            f"<span class='pill'>{html.escape(r['reason_code'])}</span> "
+            if r["reason_code"]
+            else ""
+        )
+        note_html = (
+            f"<br><span class='meta'>{rc_badge}{html.escape(r['note'])}"
+            f" · {html.escape(_human_ts(r['ts']))}</span>"
+            if r["note"] or r["ts"] or r["reason_code"]
+            else ""
+        )
+        table_rows.append(
+            f"<tr>"
+            f"<td>{bucket_pill.get(r['bucket'], r['bucket'])}</td>"
+            f"<td><code>{html.escape(r['filename'][:60])}</code><br>"
+            f"<span class='meta'>ents {r['entity_count']} · redactions {r['redact_count']}</span></td>"
+            f"<td>{decision_pill.get(r['decision'], r['decision'])}{note_html}</td>"
+            f"<td>{form}</td>"
+            f"</tr>"
+        )
+    complete_banner = (
+        "<p class='pill ok' style='padding:8px;'>"
+        "✓ Stage complete — all sampled docs have a final decision."
+        "</p>"
+        if complete
+        else f"<p class='pill warn' style='padding:8px;'>"
+        f"{counts.get('pending', 0)} of {counts.get('total', 0)} sampled docs still pending."
+        "</p>"
+    )
+    return f"""<!doctype html>
+<html><head><title>30-Doc QA — {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+{_action_result_html(action_result)}
+<h1>30-Doc QA sample</h1>
+<p>Stratified sample: 10 high-risk + 10 medium + 10 random. Stage doesn't pass until every doc has a final decision.</p>
+{complete_banner}
+<table><thead><tr><th>Bucket</th><th>Document</th><th>Status</th><th>Decide</th></tr></thead>
+<tbody>{"".join(table_rows)}</tbody></table>
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_unextractable(ctx: CaseContext, action_result: dict | None) -> str:
     """List unextractable docs with accept/reject/retry buttons."""
     meta = load_case_metadata(ctx)
@@ -2015,6 +2103,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, render_unextractable(ctx, ar))
             _LAST_ACTION_RESULT = None
             return
+        if url.path == "/qa-sample":
+            self._send(200, render_qa_sample(ctx, ar))
+            _LAST_ACTION_RESULT = None
+            return
         if url.path == "/leak-review":
             self._send(200, render_leak_review(ctx, ar))
             _LAST_ACTION_RESULT = None
@@ -2113,6 +2205,35 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "command": "unextractable.retry_extract",
                 }
             target = "/unextractable"
+        elif url.path == "/api/qa-sample/decide":
+            from dsar_orchestrator.local_broker.qa_sample import record_qa_decision
+
+            doc_ref = form.get("doc_ref", "")
+            decision = form.get("decision", "")
+            reason_code = form.get("reason_code", "")
+            note = form.get("note", "")
+            try:
+                record_qa_decision(
+                    ctx.case_dir,
+                    doc_ref=doc_ref,
+                    decision=decision,
+                    reason_code=reason_code,
+                    note=note,
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": f"qa decision={decision} recorded for {doc_ref}",
+                    "stderr": "",
+                    "command": f"qa_sample.record_qa_decision({decision!r})",
+                }
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "qa_sample.record_qa_decision",
+                }
+            target = "/qa-sample"
         elif url.path == "/api/leak-review/decide":
             doc_ref = form.get("doc_ref", "")
             decision = form.get("decision", "")
