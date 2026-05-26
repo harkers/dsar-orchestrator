@@ -1,0 +1,80 @@
+# Rules for tools/check_durant_doc.py.
+# Spec: docs/superpowers/specs/2026-05-26-durant-pipeline-hardening-design-v1.md §4.7 (B).
+#
+# Three checks all operate on `body_no_code` (the doc text with fenced + indented
+# code blocks masked to whitespace, newline-count preserved):
+#   1. path_linter      — any path-looking token must resolve or be in the bare allowlist
+#   2. stale_phrases    — phrases obsoleted by post-hardening behaviour
+#   3. required_headings + required_terms — structural completeness
+
+schema_version: 1
+
+# Phrases that MUST NOT appear in body_no_code. Each entry reports its line number
+# and ALL occurrences (re.finditer, not just first match). `reason` and
+# `obsolete_since_spec` are surfaced in the failure message so reviewers know
+# why the doc is failing.
+stale_phrases:
+  - phrase: "single LLM call. No multi-pass refinement"
+    reason: "Post-§4.2 the under-disclosure recheck is a first-class toolkit stage; the durant pass is no longer a single-call design."
+    obsolete_since_spec: "4.2"
+  - phrase: "text[:max_text_chars]"
+    reason: "Post-§4.3 truncation uses truncate_with_token_check(); blind tail-cut is no longer the implementation."
+    obsolete_since_spec: "4.3"
+  - phrase: "DURANT_SYSTEM_PROMPT duplicated in bypass script"
+    reason: "Post-§4.1 bypass scripts consume the prompt via `dsar-prompt` CLI (or vendored zipapp); the inline-constant duplication pattern is retired."
+    obsolete_since_spec: "4.1"
+  - phrase: "Verbatim from dsar_pipeline/gates/gate_durant.py"
+    reason: "Provenance comment is no longer the drift-detection mechanism; runtime hash verification via the CLI footer is."
+    obsolete_since_spec: "4.1"
+  - phrase: "default to `biographical` under uncertainty"
+    # NOT stale — keep this entry commented out as a worked example of "tempting
+    # to add but should NOT be flagged". Default-to-biographical is the
+    # asymmetric-error-cost principle and survives §§4.1–4.6 unchanged.
+
+# Headings that MUST be present in the doc (case-insensitive match against
+# parser-extracted heading tokens; whitespace-immune). Format: substring of the
+# heading inline text after stripping markdown.
+required_headings:
+  - "What the Durant test is"             # §1 — legal foundation, never drops
+  - "The decision rule"                   # §2 — verdict taxonomy
+  - "Inputs"                              # §3
+  - "Truncation strategy"                 # §3.1 — NEW post-§4.3
+  - "Programmatic approach"               # §4
+  - "Outputs"                             # §5
+  - "Toolkit canonical implementation"    # §6
+  - "Bypass-script consumption"           # §7 — REPLACES "Local-broker bypass pattern"
+  - "Under-disclosure recheck"            # §8
+  - "Model-fitness canary"                # §9.0 — NEW post-§4.4
+  - "Calibration"                         # §9.1 — renumbered
+  - "Known issues"                        # §10
+  - "Cross-references"                    # §11
+  - "Glossary"                            # §12
+
+# Terms that MUST appear somewhere in body_no_code. Substring match. These are
+# the load-bearing new vocabulary introduced by §§4.1–4.6 — if the doc rewrite
+# accidentally drops one, the lint catches it.
+required_terms:
+  - "canonical_seal_sha256"
+  - "effective_sha256"
+  - "PromptLoader"
+  - "dsar-prompt"
+  - "RecheckStage"
+  - "GateDurantRecheck"
+  - "recheck_decision.json"
+  - "recheck_summary.json"
+  - "synthesis_summary.json"
+  - "durant_verdicts.jsonl"
+  - "fitness_canary"
+  - "fn_rate_ci95"
+  - "effective_durant"
+  - "role_context"
+  - "Wilson"                              # canary uses Wilson bounds (§4.4)
+  - "truncate_with_token_check"
+
+# Bare filenames (no path component) only flagged as broken if NOT in this
+# allowlist. Operator-prose like "README.md" is OK to reference bare.
+bare_filename_allowlist:
+  - README.md
+  - CLAUDE.md
+  - LICENSE
+  - durant-test.md

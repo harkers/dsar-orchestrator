@@ -30,6 +30,14 @@ dev = [
     "import-linter >= 2.0",
     "ruff >= 0.4",
 ]
+lint = [
+    # Used by tools/check_durant_doc.py — keep here (not under `dev`) so
+    # CI can install only the lint extras without pulling in the full
+    # test stack. See docs/superpowers/specs/2026-05-26-durant-pipeline-
+    # hardening-design-v1.md §4.7 (B).
+    "markdown-it-py >= 3.0",
+    "pyyaml >= 6.0",
+]
 
 [project.scripts]
 # `dsar-conductor` is the operator-facing CLI; we deliberately don't

@@ -1,0 +1,40 @@
+# Durant reference-doc lint.
+# Spec: docs/superpowers/specs/2026-05-26-durant-pipeline-hardening-design-v1.md §4.7.
+#
+# Triggers on PRs that touch docs/ or src/dsar_orchestrator/ (the latter because
+# code changes can invalidate the prose: e.g. renaming a stage means
+# durant-test.md must be updated).
+name: durant-doc-lint
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "src/dsar_orchestrator/**"
+      - "tools/check_durant_doc.py"
+      - ".github/workflows/docs-lint.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/dsar_orchestrator/**"
+      - "tools/check_durant_doc.py"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install lint extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+      - name: Run check_durant_doc.py
+        run: |
+          python tools/check_durant_doc.py \
+            --doc docs/durant-test.md \
+            --config docs/durant-doc-lint.yaml
