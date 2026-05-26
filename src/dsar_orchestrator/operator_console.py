@@ -226,6 +226,23 @@ def _human_ts(ts: str) -> str:
         return ts
 
 
+def _reason_code_select_html() -> str:
+    """A <select> with R001-R010 + R-PENDING. Required field; empty
+    default forces operator to pick before submitting."""
+    from dsar_orchestrator.local_broker.reason_codes import REASON_CODES
+
+    opts = "".join(
+        f"<option value='{code}'>{code} — {html.escape(entry['label'])}</option>"
+        for code, entry in REASON_CODES.items()
+    )
+    return (
+        "<select name='reason_code' required style='margin-right:4px;'>"
+        "<option value=''>— reason —</option>"
+        f"{opts}"
+        "</select>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # State reading
 # ---------------------------------------------------------------------------
@@ -419,8 +436,16 @@ def save_console_state(ctx: CaseContext, state: dict) -> None:
 
 
 def toggle_blocker_resolved(
-    ctx: CaseContext, blocker_id: str, *, resolved: bool, note: str
+    ctx: CaseContext,
+    blocker_id: str,
+    *,
+    resolved: bool,
+    reason_code: str,
+    note: str,
 ) -> dict:
+    from dsar_orchestrator.local_broker.reason_codes import validate_reason_code
+
+    validate_reason_code(reason_code, note)
     state = load_console_state(ctx)
     bks = state.setdefault("resolved_blockers", {})
     # Chain-first: if schema/IO breaks, state file isn't written either.
@@ -433,12 +458,17 @@ def toggle_blocker_resolved(
             "ts": _iso_now(),
             "blocker_id": blocker_id,
             "resolved": resolved,
+            "reason_code": reason_code,
             "note": note,
         },
         item_id=blocker_id,
     )
     if resolved:
-        bks[blocker_id] = {"resolved_at": _iso_now(), "note": note}
+        bks[blocker_id] = {
+            "resolved_at": _iso_now(),
+            "reason_code": reason_code,
+            "note": note,
+        }
     else:
         bks.pop(blocker_id, None)
     save_console_state(ctx, state)
@@ -909,7 +939,8 @@ def render_blockers(ctx: CaseContext, action_result: dict | None) -> str:
                 "<form method='POST' action='/api/blocker/toggle'>"
                 f"<input type='hidden' name='id' value='{html.escape(bid)}'>"
                 f"<input type='hidden' name='resolved' value='{'0' if is_resolved else '1'}'>"
-                f"<input type='text' name='note' placeholder='How was this resolved? (optional note)' "
+                f"{_reason_code_select_html()}"
+                f"<input type='text' name='note' placeholder='How was this resolved? (note; required for R006/R010/R-PENDING)' "
                 f"value='{html.escape(resolved_note)}'>"
                 f"<button class='btn {'btn-warn' if is_resolved else 'btn-success'}' type='submit'>"
                 f"{'Mark unresolved' if is_resolved else 'Mark resolved'}</button>"
@@ -1616,13 +1647,15 @@ def render_unextractable(ctx: CaseContext, action_result: dict | None) -> str:
             "<form method='POST' action='/api/unextractable/decide' style='display:inline;'>"
             f"<input type='hidden' name='source_path' value='{ref}'>"
             f"<input type='hidden' name='decision' value='accept'>"
-            "<input type='text' name='note' placeholder='optional reason' style='width:160px;'>"
+            f"{_reason_code_select_html()}"
+            "<input type='text' name='note' placeholder='note (required for R006/R010/R-PENDING)' style='width:200px;'>"
             "<button class='btn btn-success' type='submit' title='Documented exclusion'>Accept</button></form>"
             " "
             "<form method='POST' action='/api/unextractable/decide' style='display:inline;'>"
             f"<input type='hidden' name='source_path' value='{ref}'>"
             f"<input type='hidden' name='decision' value='reject'>"
-            "<input type='text' name='note' placeholder='optional reason' style='width:160px;'>"
+            f"{_reason_code_select_html()}"
+            "<input type='text' name='note' placeholder='note (required for R006/R010/R-PENDING)' style='width:200px;'>"
             "<button class='btn btn-danger' type='submit' title='Out of scope'>Reject</button></form>"
             " "
             "<form method='POST' action='/api/unextractable/retry' style='display:inline;' "
@@ -1630,10 +1663,15 @@ def render_unextractable(ctx: CaseContext, action_result: dict | None) -> str:
             f"<input type='hidden' name='source_path' value='{ref}'>"
             "<button class='btn btn-primary' type='submit'>Retry</button></form>"
         )
+        rc_badge = (
+            f"<span class='pill'>{html.escape(it.get('decision_reason_code', ''))}</span> "
+            if it.get("decision_reason_code")
+            else ""
+        )
         note_html = (
-            f"<br><span class='meta'>{html.escape(it['decision_note'])} · "
+            f"<br><span class='meta'>{rc_badge}{html.escape(it['decision_note'])} · "
             f"{html.escape(it['decision_ts'])}</span>"
-            if it["decision_note"] or it["decision_ts"]
+            if it["decision_note"] or it["decision_ts"] or it.get("decision_reason_code")
             else ""
         )
         rows.append(
@@ -1692,10 +1730,15 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
             f"<b>{it['leaks_count']} leak(s)</b> across <b>{distinct_n}</b> distinct terms"
             + (f". Sample: {sample}" if sample else ".")
         )
+        rc_badge = (
+            f"<span class='pill'>{html.escape(it.get('decision_reason_code', ''))}</span> "
+            if it.get("decision_reason_code")
+            else ""
+        )
         note_html = (
-            f"<br><span class='meta'>{html.escape(it['decision_note'])} · "
+            f"<br><span class='meta'>{rc_badge}{html.escape(it['decision_note'])} · "
             f"{html.escape(it['decision_ts'])}</span>"
-            if it["decision_note"] or it["decision_ts"]
+            if it["decision_note"] or it["decision_ts"] or it.get("decision_reason_code")
             else ""
         )
         # Action forms
@@ -1703,6 +1746,7 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
             "<form method='POST' action='/api/leak-review/decide' style='display:inline-block;margin:4px 4px 0 0;'>"
             f"<input type='hidden' name='doc_ref' value='{ref}'>"
             f"<input type='hidden' name='decision' value='accept_exclude'>"
+            f"{_reason_code_select_html()}"
             "<input type='text' name='note' placeholder='exemption rationale' style='width:200px;'>"
             "<button class='btn btn-danger' type='submit'>Exclude (with exemption)</button></form>"
         )
@@ -1710,6 +1754,7 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
             "<form method='POST' action='/api/leak-review/decide' style='display:inline-block;margin:4px 4px 0 0;'>"
             f"<input type='hidden' name='doc_ref' value='{ref}'>"
             f"<input type='hidden' name='decision' value='include_with_note'>"
+            f"{_reason_code_select_html()}"
             "<input type='text' name='note' placeholder='operator rationale' style='width:200px;'>"
             "<button class='btn btn-warn' type='submit'>Include with note</button></form>"
         )
@@ -1717,6 +1762,7 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
             "<form method='POST' action='/api/leak-review/decide' style='display:inline-block;margin:4px 4px 0 0;'>"
             f"<input type='hidden' name='doc_ref' value='{ref}'>"
             f"<input type='hidden' name='decision' value='manual_fix_done'>"
+            f"{_reason_code_select_html()}"
             "<input type='text' name='note' placeholder='what you fixed' style='width:200px;'>"
             "<button class='btn btn-success' type='submit'>Manually fixed (mark done)</button></form>"
         )
@@ -1902,10 +1948,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/unextractable/decide":
             source_path = form.get("source_path", "")
             decision = form.get("decision", "")
+            reason_code = form.get("reason_code", "")
             note = form.get("note", "")
             shim = _UnextCaseShim(case_dir=ctx.case_dir)
             try:
-                _unext_record_decision(shim, source_path=source_path, decision=decision, note=note)
+                _unext_record_decision(
+                    shim,
+                    source_path=source_path,
+                    decision=decision,
+                    reason_code=reason_code,
+                    note=note,
+                )
                 _LAST_ACTION_RESULT = {
                     "rc": 0,
                     "stdout": f"decision={decision} recorded for {Path(source_path).name}",
@@ -1947,10 +2000,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/leak-review/decide":
             doc_ref = form.get("doc_ref", "")
             decision = form.get("decision", "")
+            reason_code = form.get("reason_code", "")
             note = form.get("note", "")
             shim = _LeakCaseShim(case_dir=ctx.case_dir)
             try:
-                _leak_record_decision(shim, doc_ref=doc_ref, decision=decision, note=note)
+                _leak_record_decision(
+                    shim,
+                    doc_ref=doc_ref,
+                    decision=decision,
+                    reason_code=reason_code,
+                    note=note,
+                )
                 _LAST_ACTION_RESULT = {
                     "rc": 0,
                     "stdout": f"decision={decision} recorded for {doc_ref}",
@@ -1989,10 +2049,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/blocker/toggle":
             bid = form.get("id", "")
             resolved = form.get("resolved") == "1"
+            reason_code = form.get("reason_code", "")
             note = form.get("note", "")
             if bid:
                 try:
-                    toggle_blocker_resolved(ctx, bid, resolved=resolved, note=note)
+                    toggle_blocker_resolved(
+                        ctx, bid, resolved=resolved, reason_code=reason_code, note=note
+                    )
                     _LAST_ACTION_RESULT = None
                 except Exception as exc:
                     _LAST_ACTION_RESULT = {

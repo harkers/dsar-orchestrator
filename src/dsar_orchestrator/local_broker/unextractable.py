@@ -101,6 +101,7 @@ def list_unextractable(ctx: _CaseShim) -> list[dict]:
                 "filename": pp.name,
                 "extension": pp.suffix.lower(),
                 "decision": d.get("decision", "pending"),
+                "decision_reason_code": d.get("reason_code", ""),
                 "decision_note": d.get("note", ""),
                 "decision_ts": d.get("ts", ""),
             }
@@ -132,15 +133,26 @@ def _load_decisions(ctx: _CaseShim) -> dict[str, dict]:
     return by_path
 
 
-def record_decision(ctx: _CaseShim, *, source_path: str, decision: str, note: str = "") -> dict:
+def record_decision(
+    ctx: _CaseShim,
+    *,
+    source_path: str,
+    decision: str,
+    reason_code: str,
+    note: str = "",
+) -> dict:
     """Append a new decision row. Accepts ``decision`` in
     {accept, reject, retried_ok, retried_fail, pending}."""
     if decision not in ("accept", "reject", "retried_ok", "retried_fail", "pending"):
         raise ValueError(f"unknown decision: {decision!r}")
+    from dsar_orchestrator.local_broker.reason_codes import validate_reason_code
+
+    validate_reason_code(reason_code, note)
     row = {
         "ts": _iso_now(),
         "source_path": source_path,
         "decision": decision,
+        "reason_code": reason_code,
         "note": note,
     }
     # Chain-first: if schema/IO breaks, the user-visible JSONL row is not written.
