@@ -6,6 +6,17 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-05-26
+
+### Fixed — unextractable.retry_extract crashed with TypeError after #105
+
+- `unextractable.retry_extract()` internally calls `record_decision()`, which started requiring a `reason_code` keyword after PR #32 / v0.7.0 (#105). The retry path was not updated and crashed with `TypeError: record_decision() missing 1 required keyword-only argument: 'reason_code'` on every invocation — both happy-path (retried_ok) and error-path (retried_fail).
+- Fix: all 3 `record_decision()` calls inside `retry_extract` now pass `reason_code="R009"` (Technical extraction issue), matching the semantic intent of a re-ingest after the original failure.
+- Discovered during live operator retry of 57 case-301770 files agent01 had silently skipped (toolkit issue harkers/dsar-toolkit#153). All 57 retries failed with this regression; once the fix lands and the venv is re-pinned, the retry can proceed.
+- 3 new regression tests in `tests/test_unextractable_retry.py` covering: happy path appends ingested-item + reason-coded decision row; ingest_v3 raises → retried_fail with reason_code; missing source path → retried_fail with reason_code. (No coverage existed before — that's what let the regression slip through #105 review.)
+- Hermetic count: 479 passing (was 476; +3).
+- Version: pre-1.0 PATCH.
+
 ## [0.9.6] - 2026-05-26
 
 ### Added — dsar-durant-calibration CLI promoted to conductor (#111 sub-6, completes #111)

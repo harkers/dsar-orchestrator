@@ -189,13 +189,25 @@ def retry_extract(ctx: _CaseShim, *, source_path: str, case_id: str) -> dict:
     src = Path(source_path)
     if not src.exists():
         msg = f"source file does not exist: {src}"
-        record_decision(ctx, source_path=source_path, decision="retried_fail", note=msg)
+        record_decision(
+            ctx,
+            source_path=source_path,
+            decision="retried_fail",
+            reason_code="R009",
+            note=msg,
+        )
         return {"ok": False, "error": msg, "error_type": "FileNotFoundError"}
     try:
         doc = ingest_v3.ingest(src)
     except Exception as exc:  # noqa: BLE001 — surface any ingest_v3 error
         msg = f"{type(exc).__name__}: {exc}"
-        record_decision(ctx, source_path=source_path, decision="retried_fail", note=msg)
+        record_decision(
+            ctx,
+            source_path=source_path,
+            decision="retried_fail",
+            reason_code="R009",
+            note=msg,
+        )
         return {"ok": False, "error": msg, "error_type": type(exc).__name__}
 
     # Build the same item shape agent01 emits (v0.4.5 includes message_id)
@@ -230,6 +242,7 @@ def retry_extract(ctx: _CaseShim, *, source_path: str, case_id: str) -> dict:
         ctx,
         source_path=source_path,
         decision="retried_ok",
+        reason_code="R009",
         note=f"chars={doc.char_count()} yield={doc.yield_ratio():.3f}",
     )
     return {"ok": True, "item": item}
