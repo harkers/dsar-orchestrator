@@ -143,6 +143,15 @@ def record_decision(ctx: _CaseShim, *, source_path: str, decision: str, note: st
         "decision": decision,
         "note": note,
     }
+    # Chain-first: if schema/IO breaks, the user-visible JSONL row is not written.
+    from dsar_orchestrator.local_broker.audit_chain import emit_for_case_dir
+
+    emit_for_case_dir(
+        ctx.case_dir,
+        decision_kind="unextractable",
+        payload=row,
+        item_id=source_path,
+    )
     target = _decisions_file(ctx)
     target.parent.mkdir(parents=True, exist_ok=True)
     with _DECISION_LOCK:
