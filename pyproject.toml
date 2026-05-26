@@ -40,6 +40,9 @@ dev = [
 dsar-conductor = "dsar_orchestrator.cli:main"
 dsar-analyse-logs = "dsar_orchestrator.log_analyser.cli:main"
 dsar-synthesize-case = "dsar_orchestrator.synthesis.cli:main"
+# Local-broker tools — see src/dsar_orchestrator/local_broker/ and
+# docs/durant-test.md for the deployment context.
+dsar-gate-llm = "dsar_orchestrator.local_broker.gate_llm:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
