@@ -18,6 +18,7 @@ import argparse
 import html
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -360,6 +361,8 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
     "/blockers": "release",
     "/release-check": "release",
     "/closure-letter": "release",
+    "/waiver": "release",
+    "/waiver/dpo": "release",
 }
 
 # Phase gating for dynamic-suffix routes. ``is_route_accessible`` consults
@@ -2090,6 +2093,140 @@ span[data-code="DS"]{{background:#efe;color:#060;}}
 </body></html>"""
 
 
+def _open_blockers(ctx: CaseContext, severities: tuple[str, ...]) -> list[dict]:
+    """Return open CRITICAL/HIGH (or whatever passed) blockers from the
+    latest Approver verdict, filtered against console-side resolved set."""
+    last = latest_approver_verdict(ctx)
+    if not last:
+        return []
+    blocking = last.get("decision", {}).get("blocking_issues", [])
+    resolved = load_console_state(ctx).get("resolved_blockers", {})
+    out: list[dict] = []
+    for b in blocking:
+        if b.get("issue_id") in resolved:
+            continue
+        if b.get("severity") in severities:
+            out.append(b)
+    return out
+
+
+def render_waiver(ctx: CaseContext, action_result: dict | None) -> str:
+    """Operator-facing waiver page. Lists open CRITICAL/HIGH blockers with
+    a batched-select form to propose a waiver covering one or more of them."""
+    from dsar_orchestrator.local_broker import waiver as wv
+
+    open_hard = _open_blockers(ctx, ("CRITICAL", "HIGH"))
+    pending = wv.list_pending_waivers(ctx)
+    all_waivers = wv.list_all_waivers(ctx)
+
+    if open_hard:
+        rows = []
+        for b in open_hard:
+            bid = html.escape(b.get("issue_id", ""))
+            sev = html.escape(b.get("severity", ""))
+            summary = html.escape(b.get("summary", b.get("description", "")))
+            rows.append(
+                f"<tr><td><input type='checkbox' name='blocker_ids' value='{bid}'></td>"
+                f"<td><code>{bid}</code></td>"
+                f"<td><span class='pill {('fail' if sev == 'CRITICAL' else 'warn')}'>{sev}</span></td>"
+                f"<td>{summary}</td></tr>"
+            )
+        propose_form = f"""
+<form method='POST' action='/api/waiver/propose'>
+  <table>
+    <tr><th></th><th>blocker</th><th>severity</th><th>summary</th></tr>
+    {"".join(rows)}
+  </table>
+  <p><label>operator id <input type='text' name='operator_id' required></label></p>
+  <p><label>justification<br><textarea name='justification' rows='4' cols='80' required></textarea></label></p>
+  <p><button class='btn' type='submit'>Propose waiver covering selected blockers</button></p>
+</form>"""
+    else:
+        propose_form = "<p class='muted'>No open CRITICAL or HIGH blockers — nothing to waive.</p>"
+
+    pending_rows = []
+    for w in pending:
+        wid = html.escape(w["waiver_id"])
+        bids = ", ".join(html.escape(b) for b in w["blocker_ids"])
+        pending_rows.append(
+            f"<tr><td><code>{wid}</code></td><td>{bids}</td>"
+            f"<td>{html.escape(w['operator_id'])}</td>"
+            f"<td>{html.escape(w['proposed_ts'])}</td>"
+            f"<td>{html.escape(w['justification'])}</td></tr>"
+        )
+    all_rows = []
+    for w in all_waivers:
+        state_pill = (
+            "<span class='pill ok'>co-signed</span>"
+            if w["state"] == "co_signed"
+            else "<span class='pill np'>pending</span>"
+        )
+        all_rows.append(
+            f"<tr><td><code>{html.escape(w['waiver_id'])}</code></td>"
+            f"<td>{state_pill}</td>"
+            f"<td>{', '.join(html.escape(b) for b in w['blocker_ids'])}</td>"
+            f"<td>{html.escape(w['operator_id'])}</td>"
+            f"<td>{html.escape(w.get('dpo_id') or '—')}</td></tr>"
+        )
+
+    return f"""<!doctype html>
+<html><head><title>Waiver · {html.escape(ctx.case_id)}</title>
+{_BASE_CSS}
+</head><body>
+<h1>Hard-Blocker Waiver · {html.escape(ctx.case_id)}</h1>
+{_action_result_html(action_result)}
+<h2>Propose a waiver</h2>
+{propose_form}
+<h2>Pending DPO co-sign</h2>
+<table><tr><th>waiver_id</th><th>blockers</th><th>operator</th><th>proposed</th><th>justification</th></tr>
+{"".join(pending_rows) or "<tr><td colspan='5' class='muted'>None.</td></tr>"}
+</table>
+<p><a href='/waiver/dpo'>→ DPO co-sign page</a></p>
+<h2>All waivers</h2>
+<table><tr><th>waiver_id</th><th>state</th><th>blockers</th><th>operator</th><th>dpo</th></tr>
+{"".join(all_rows) or "<tr><td colspan='5' class='muted'>None.</td></tr>"}
+</table>
+{_footer(ctx)}
+</body></html>"""
+
+
+def render_waiver_dpo(ctx: CaseContext, action_result: dict | None) -> str:
+    """DPO-facing waiver page. Lists pending waivers with one co-sign form
+    each. DPO id and note required to finalise."""
+    from dsar_orchestrator.local_broker import waiver as wv
+
+    pending = wv.list_pending_waivers(ctx)
+    has_token = bool(os.environ.get("DSAR_DPO_TOKEN"))
+    cards = []
+    for w in pending:
+        wid = html.escape(w["waiver_id"])
+        bids = ", ".join(f"<code>{html.escape(b)}</code>" for b in w["blocker_ids"])
+        cards.append(
+            f"""<div class='card'>
+  <p><b>{wid}</b> · proposed by {html.escape(w["operator_id"])} at {html.escape(w["proposed_ts"])}</p>
+  <p>Blockers: {bids}</p>
+  <p>Operator justification: {html.escape(w["justification"])}</p>
+  <form method='POST' action='/api/waiver/cosign'>
+    <input type='hidden' name='waiver_id' value='{wid}'>
+    <p><label>DPO id <input type='text' name='dpo_id' required></label></p>
+    <p><label>DPO note<br><textarea name='dpo_note' rows='3' cols='80' required></textarea></label></p>
+    <p><button class='btn btn-danger' type='submit'>Co-sign waiver</button></p>
+  </form>
+</div>"""
+        )
+
+    return f"""<!doctype html>
+<html><head><title>Waiver DPO · {html.escape(ctx.case_id)}</title>
+{_BASE_CSS}
+</head><body>
+<h1>DPO co-sign · {html.escape(ctx.case_id)}</h1>
+{_action_result_html(action_result)}
+{"<p class='meta'>DPO token enforced (DSAR_DPO_TOKEN set).</p>" if has_token else "<p class='meta'>Single-operator mode — no DPO token configured.</p>"}
+{"".join(cards) or "<p class='muted'>No pending waivers.</p>"}
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_file_view(ctx: CaseContext, path_str: str) -> str | None:
     try:
         p = Path(path_str).resolve()
@@ -2231,6 +2368,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self._send(404, "<h1>404 redaction viewer: missing or invalid doc ref</h1>")
                 return
             self._send(200, render_redaction_viewer(ctx, doc_ref))
+            return
+        if url.path == "/waiver":
+            self._send(200, render_waiver(ctx, ar))
+            _LAST_ACTION_RESULT = None
+            return
+        if url.path == "/waiver/dpo":
+            self._send(200, render_waiver_dpo(ctx, ar))
+            _LAST_ACTION_RESULT = None
             return
         self._send(404, "<h1>404</h1>")
 
@@ -2413,6 +2558,74 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             else:
                 _LAST_ACTION_RESULT = None
             target = "/blockers"
+        elif url.path == "/api/waiver/propose":
+            from dsar_orchestrator.local_broker import waiver as _wv
+
+            blocker_ids = [
+                v
+                for v in urllib.parse.parse_qs(raw, keep_blank_values=True).get("blocker_ids", [])
+                if v
+            ]
+            justification = form.get("justification", "")
+            operator_id = form.get("operator_id", "")
+            try:
+                result = _wv.propose_waiver(
+                    ctx,
+                    blocker_ids=blocker_ids,
+                    justification=justification,
+                    operator_id=operator_id,
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": (
+                        f"waiver {result['waiver_id']} proposed covering "
+                        f"{len(result['blocker_ids'])} blocker(s) — awaiting DPO co-sign"
+                    ),
+                    "stderr": "",
+                    "command": "waiver.propose_waiver(…)",
+                }
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "waiver.propose_waiver",
+                }
+            target = "/waiver"
+        elif url.path == "/api/waiver/cosign":
+            from dsar_orchestrator.local_broker import waiver as _wv
+
+            allowed, reason = _wv.check_dpo_auth(self.headers.get("Authorization"))
+            if not allowed:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"DPO auth: {reason}",
+                    "command": "waiver.co_sign_waiver",
+                }
+                target = "/waiver/dpo"
+            else:
+                waiver_id = form.get("waiver_id", "")
+                dpo_id = form.get("dpo_id", "")
+                dpo_note = form.get("dpo_note", "")
+                try:
+                    result = _wv.co_sign_waiver(
+                        ctx, waiver_id=waiver_id, dpo_id=dpo_id, dpo_note=dpo_note
+                    )
+                    _LAST_ACTION_RESULT = {
+                        "rc": 0,
+                        "stdout": f"waiver {result['waiver_id']} co-signed by {result['dpo_id']}",
+                        "stderr": "",
+                        "command": "waiver.co_sign_waiver(…)",
+                    }
+                except Exception as exc:
+                    _LAST_ACTION_RESULT = {
+                        "rc": 2,
+                        "stdout": "",
+                        "stderr": f"{type(exc).__name__}: {exc}",
+                        "command": "waiver.co_sign_waiver",
+                    }
+                target = "/waiver/dpo"
         elif url.path == "/api/summarise-stage":
             stage = form.get("stage", "")
             if stage in STAGES:

@@ -6,6 +6,29 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-27
+
+### Added — Hard-Blocker Waiver workflow (#110, v3-console Phase 2)
+
+Console-side workflow letting an operator propose a waiver covering one or more CRITICAL/HIGH blockers and a DPO co-sign it. Separate from the DSAR Approver's four verdicts: Approver says *what the auditor thinks*; the waiver records *that the operator accepts residual risk and the DPO co-signed*. Both events land in the audit chain.
+
+Broker decisions locked before build:
+- Keep Approver's 4 verdicts; waiver is a separate console-side workflow.
+- Dedicated `/waiver` page (operator, batched signoff) + `/waiver/dpo` page (DPO co-sign).
+- Auth via `DSAR_DPO_TOKEN` env: when set, DPO route requires `Authorization: Bearer <token>`; when unset, single-operator mode (open). Proportionate for a local console.
+- Reuse existing `REVIEWER_DECISION_MADE` enum with `waiver: true` + `co_signer` payload — no toolkit PR / new enum needed.
+
+Implementation:
+- **new `local_broker/waiver.py`**: `WaiverWorkflow` state (pending → co-signed); `propose_waiver(ctx, blocker_ids, justification, operator_id)` / `co_sign_waiver(ctx, waiver_id, dpo_id, dpo_note)`; helpers `list_pending_waivers`, `list_all_waivers`, `load_waiver`, `check_dpo_auth`. Uses `secrets.compare_digest` for token check.
+- **Two chain events per waiver**:
+  - `propose` (stage `waiver_propose`, payload `{waiver:true, action:propose, waiver_id, blocker_ids, operator_id, justification, ts}`)
+  - `cosign` (stage `waiver_cosign`, payload `{waiver:true, action:cosign, waiver_id, blocker_ids, operator_id, dpo_id, justification, dpo_note, original_event_hash, ts}`)  — `original_event_hash` is the propose event's canonical hash; the cosign event is the tamper-evident anchor.
+- **`<case>/audit/waivers.jsonl`** append-only, latest-wins on `waiver_id`. Each write follows the chain-first + compensating-event pattern from #114 (try/except on JSONL append → emit `FAILURE_RECORDED` referencing original event hash → re-raise).
+- **No double-cosign**: `co_sign_waiver` raises `ValueError` if the latest row already has `state == "co_signed"`. Missing waiver_id → `LookupError`.
+- **Routes**: `GET /waiver` lists open CRITICAL/HIGH blockers with batched-select propose form + pending/all waivers tables. `GET /waiver/dpo` lists pending with one cosign form each. `POST /api/waiver/propose` calls `propose_waiver`. `POST /api/waiver/cosign` calls `check_dpo_auth(self.headers["Authorization"])` first, then `co_sign_waiver`. Both pages added to `ROUTE_REQUIRED_PHASE` min "release".
+- 16 new tests (`tests/test_waiver.py`): propose validation × 3, propose chain event, cosign finalises + elevated payload, missing-id `LookupError`, no-double-cosign `ValueError`, list helpers, DPO auth gate (env set vs unset, missing/wrong/correct token), phase gating, render smoke tests for both pages. Suite: 571 passing (was 555; +16).
+- Version: pre-1.0 MINOR (new feature surface area: 2 new routes, new module, new env auth shim).
+
 ## [0.9.9] - 2026-05-27
 
 ### Added — two-panel redaction viewer (#109, v3-console Phase 2)
