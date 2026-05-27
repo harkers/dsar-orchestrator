@@ -510,9 +510,12 @@ def toggle_blocker_resolved(
     state = load_console_state(ctx)
     bks = state.setdefault("resolved_blockers", {})
     # Chain-first: if schema/IO breaks, state file isn't written either.
-    from dsar_orchestrator.local_broker.audit_chain import emit_for_case_dir
+    from dsar_orchestrator.local_broker.audit_chain import (
+        emit_failure_for_case_dir,
+        emit_for_case_dir,
+    )
 
-    emit_for_case_dir(
+    original_hash = emit_for_case_dir(
         ctx.case_dir,
         decision_kind="blocker_toggle",
         payload={
@@ -532,7 +535,23 @@ def toggle_blocker_resolved(
         }
     else:
         bks.pop(blocker_id, None)
-    save_console_state(ctx, state)
+    try:
+        save_console_state(ctx, state)
+    except OSError as exc:
+        emit_failure_for_case_dir(
+            ctx.case_dir,
+            decision_kind="blocker_toggle",
+            payload={
+                "phase": "post-chain-state-write",
+                "original_event_hash": original_hash,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "target_path": str(ctx.console_state),
+                "blocker_id": blocker_id,
+            },
+            item_id=blocker_id,
+        )
+        raise
     return state
 
 
