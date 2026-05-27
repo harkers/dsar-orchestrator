@@ -25,3 +25,6 @@ dist/
 env/
 htmlcov/
 venv/
+
+# Runtime output from sibling tools — not source
+cloakllm_audit/
