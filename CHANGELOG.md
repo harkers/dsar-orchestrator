@@ -6,6 +6,21 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-05-27
+
+### Fixed — `/qa-walkthrough` right pane shows actual redacted artefact (not overlay projection); double-click captures leak terms
+
+The v0.14.0 walkthrough right pane was a re-projection of the source text with `[CODE]` overlays computed from `working/<ref>_tags.json`. That over-reported leaks: the toolkit's `redact_msg` does more than span-replace (it parses the .msg, converts to plain text via a different code path than `working/<ref>.txt`, and collapses email signatures), so non-tagged text appearing near tagged entities — e.g. role descriptions in a signature block — would show as "leaking" in the walkthrough but be correctly stripped in the actual `/redacted/` output. This caused at least one false-positive decline on a real case.
+
+- New `qa_walkthrough.load_redacted_text(case_dir, doc_ref)` reads the actual `/redacted/<ref>_*.{eml,pdf,html,txt,csv}` artefact and returns the text exactly as it ships into the disclosure pack. EML is read verbatim (the toolkit's pseudo-email format is not RFC-2822-strict; Python's policy=default email parser drops `From: [R1] <[R1]>` headers to `<>`, which loses information).
+- Right pane now shows that text; falls back to the overlay projection only if no redacted artefact exists (rare format / pre-export state).
+- Header on each pane surfaces its source (`working/<ref>.txt` vs `redacted/<ref>_*.eml`) so the operator can see where the content came from.
+- Double-clicking a word in the right pane adds it to a leak-terms list panel below the panes. Click a chip to remove. The decline form auto-opens once the operator has at least one chip.
+- Decline form posts the leak-terms list as a JSON string in a `LEAK_TERMS=` prefix on the note field, so downstream tooling (re-redaction, `subject_protected_phrases` updates) can parse the structured list back out.
+- DOM construction uses `createElement` + `textContent`, not `innerHTML`, so chip content can't escape into HTML even if the redacted text contained an `<img onerror>` injection.
+
+5 new tests (12 total for qa_walkthrough); full suite 643 passing.
+
 ## [0.14.0] - 2026-05-27
 
 ### Added — `/qa-walkthrough` operator review feature
