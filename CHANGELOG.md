@@ -6,6 +6,22 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-27
+
+### Added — `/qa-walkthrough` operator review feature
+
+One-doc-per-screen walkthrough of N random redacted docs (default 50) with side-by-side source ↔ redacted text, big **Approve** and **Decline** (with reason + free-text feedback) buttons, and auto-advance to next pending. Distinct from `/qa-sample` (which is a 30-doc stratified-sample table view); this one is for sequential human review of redaction quality.
+
+- New `local_broker/qa_walkthrough.py`: `build_sample(case_dir, size, seed)`, `load_sample`, `load_decisions`, `progress`, `ref_at`.
+- New `render_qa_walkthrough(ctx, idx, action_result)` with three branches: build-sample form (no sample yet), per-doc page (sample exists, doc pending), summary table (all docs decided).
+- New routes: `GET /qa-walkthrough`, `GET /qa-walkthrough/<idx>`, `GET /qa-walkthrough/done`, `POST /api/qa-walkthrough/build`, `POST /api/qa-walkthrough/decide`.
+- Decisions flow through the existing `qa_sample.record_qa_decision` for audit-chain consistency (single source of truth for QA decisions).
+- Side-by-side panes reuse `redaction_viewer.build_overlay` + `render_original_html` + `render_redacted_html` (the #109 primitives).
+- Sample persisted to `audit/qa_walkthrough_sample.json` with seed for reproducibility.
+- Phase-gated to `redact` via both `ROUTE_REQUIRED_PHASE['/qa-walkthrough']` and `ROUTE_PREFIX_REQUIRED_PHASE['/qa-walkthrough/']`.
+
+7 new tests; full suite 638 passing.
+
 ## [0.13.0] - 2026-05-27
 
 ### Added — Per-instance triage on the ambiguous-flag review screen (#115b, post-Phase 2)

@@ -358,6 +358,7 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
     "/unextractable": "discovery",
     "/leak-review": "redact",
     "/qa-sample": "redact",
+    "/qa-walkthrough": "redact",
     "/flag-review": "redact",
     "/blockers": "release",
     "/release-check": "release",
@@ -371,6 +372,7 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
 ROUTE_PREFIX_REQUIRED_PHASE: dict[str, str] = {
     "/redaction-viewer/": "redact",
     "/flag-review/cluster": "redact",
+    "/qa-walkthrough/": "redact",
 }
 
 
@@ -785,7 +787,7 @@ def _case_header(ctx: CaseContext, meta: dict) -> str:
         "</div>"
         "<nav>"
         "<a href='/'>Home</a>"
-        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a>"
+        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a><a href='/qa-walkthrough'>QA walkthrough</a>"
         "<a href='/release-check'>Release readiness</a>"
         "<a href='/pipeline'>Pipeline details</a>"
         "</nav></div>"
@@ -2069,6 +2071,215 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
 </body></html>"""
 
 
+def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict | None) -> str:
+    """One-doc-per-screen walkthrough of N random redacted docs with
+    side-by-side source / redacted text + per-doc approve/decline form.
+    The sample is generated via ``qa_walkthrough.build_sample`` and
+    persisted to ``audit/qa_walkthrough_sample.json``."""
+    from dsar_orchestrator.local_broker import qa_walkthrough as qw
+    from dsar_orchestrator.local_broker.redaction_viewer import (
+        build_overlay,
+        render_original_html,
+        render_redacted_html,
+    )
+
+    meta = load_case_metadata(ctx)
+    sample = qw.load_sample(ctx.case_dir)
+
+    if not sample:
+        return f"""<!doctype html>
+<html><head><title>QA walkthrough · {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>QA walkthrough</h1>
+<p class='meta'>One redacted doc per screen — source on the left, redacted on the right. Approve or decline (with feedback) and the next pending doc loads automatically.</p>
+{_action_result_html(action_result)}
+<form method='POST' action='/api/qa-walkthrough/build' class='card' style='max-width:600px;'>
+  <p><label>Sample size <input type='number' name='size' value='50' min='1' max='1000' style='width:80px;'></label> &middot; pick this many random docs from the {len(qw._redacted_refs(ctx.case_dir)):,} redacted-or-exported docs in the corpus.</p>
+  <p><label>Seed (optional, for reproducible sample) <input type='text' name='seed' placeholder='leave blank to pick random'></label></p>
+  <p><button class='btn btn-primary' type='submit'>Build sample &amp; start walkthrough</button></p>
+</form>
+{_footer(ctx)}
+</body></html>"""
+
+    refs = sample.get("refs", [])
+    prog = qw.progress(ctx.case_dir)
+
+    if idx is None:
+        idx = prog["next_pending_idx"] if prog["next_pending_idx"] is not None else 0
+
+    if prog["pending"] == 0:
+        decisions = qw.load_decisions(ctx.case_dir)
+        rows: list[str] = []
+        for i, ref in enumerate(refs):
+            d = decisions.get(ref, {})
+            ts_short = (d.get("ts", "") or "")[:19].replace("T", " ")
+            verdict = d.get("decision", "?")
+            note = html.escape((d.get("note", "") or "")[:80])
+            badge = "ok" if verdict == "approve" else "warn"
+            rows.append(
+                f"<tr><td>{i + 1}</td>"
+                f"<td><a href='/qa-walkthrough/{i}'>{html.escape(ref)}</a></td>"
+                f"<td><span class='pill {badge}'>{html.escape(verdict)}</span></td>"
+                f"<td>{html.escape(d.get('reason_code', ''))}</td>"
+                f"<td>{note}</td>"
+                f"<td class='meta'>{html.escape(ts_short)}</td></tr>"
+            )
+        return f"""<!doctype html>
+<html><head><title>QA walkthrough · complete · {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>QA walkthrough &mdash; complete</h1>
+<p><span class='pill ok'>{prog["approved"]} approved</span> &nbsp; <span class='pill warn'>{prog["declined"]} declined</span> of {prog["total"]} sampled docs.</p>
+<table><thead><tr><th>#</th><th>doc</th><th>decision</th><th>code</th><th>note</th><th>ts</th></tr></thead>
+<tbody>{"".join(rows)}</tbody></table>
+<form method='POST' action='/api/qa-walkthrough/build' style='margin-top:1em;'><button class='btn' type='submit'>Build a fresh sample</button></form>
+{_footer(ctx)}
+</body></html>"""
+
+    if idx < 0:
+        idx = 0
+    if idx >= len(refs):
+        idx = len(refs) - 1
+    doc_ref = refs[idx]
+
+    text_path = ctx.case_dir / "working" / f"{doc_ref}.txt"
+    if text_path.exists():
+        try:
+            source_text = text_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            source_text = f"[error reading source text: {exc}]"
+    else:
+        source_text = "[source text file missing]"
+
+    overlay = build_overlay(ctx.case_dir, doc_ref)
+    original_block = render_original_html(source_text)
+    redacted_block = (
+        render_redacted_html(source_text, overlay) if overlay["exists"] else original_block
+    )
+
+    reg_path = ctx.case_dir / "working" / "register.json"
+    filename = doc_ref
+    pdf_name = ""
+    if reg_path.exists():
+        try:
+            reg = json.loads(reg_path.read_text())
+            for e in reg:
+                if e.get("ref") == doc_ref:
+                    filename = e.get("filename", doc_ref)
+                    pdf_name = (e.get("export", {}) or {}).get("filename", "")
+                    break
+        except (OSError, json.JSONDecodeError):
+            pass
+    pdf_link = (
+        f"<a href='/file?path={urllib.parse.quote(str((ctx.case_dir / 'output' / pdf_name).resolve()))}' target='_blank'>open exported PDF</a>"
+        if pdf_name
+        else "<span class='meta'>no exported PDF</span>"
+    )
+
+    existing = qw.load_decisions(ctx.case_dir).get(doc_ref) or {}
+    existing_verdict = existing.get("decision", "")
+    existing_note = existing.get("note", "")
+    existing_code = existing.get("reason_code", "")
+
+    nav_prev = (
+        f"<a class='btn' href='/qa-walkthrough/{idx - 1}'>&larr; previous</a>"
+        if idx > 0
+        else "<span class='btn' style='opacity:0.4;'>&larr; previous</span>"
+    )
+    nav_next = (
+        f"<a class='btn' href='/qa-walkthrough/{idx + 1}'>skip &rarr;</a>"
+        if idx < len(refs) - 1
+        else "<span class='btn' style='opacity:0.4;'>skip &rarr;</span>"
+    )
+
+    pct = int(round(((prog["approved"] + prog["declined"]) / max(1, prog["total"])) * 100))
+    overlay_entity_count = len(overlay.get("entities", [])) if overlay["exists"] else 0
+    redacted_entity_count = sum(
+        1 for e in overlay.get("entities", []) if e.get("redact") in (True, "flag")
+    )
+
+    decline_open = " open" if existing_verdict and existing_verdict != "approve" else ""
+
+    return f"""<!doctype html>
+<html><head><title>QA {idx + 1}/{len(refs)} · {html.escape(doc_ref)}</title>{_BASE_CSS}
+<style>
+.walk{{display:grid;grid-template-columns:1fr 1fr;gap:1em;}}
+.walk .pane{{border:1px solid #ccc;padding:0.5em;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;height:60vh;overflow:auto;}}
+.walk h2{{margin-top:0;font-size:0.9em;}}
+.walk span[data-code]{{background:#fee;color:#900;padding:1px 4px;border-radius:3px;font-weight:bold;}}
+.walk span[data-code="NR"]{{background:#ffd;color:#960;}}
+.walk span[data-code="DS"]{{background:#efe;color:#060;}}
+.progressbar{{height:8px;background:#eee;border-radius:4px;overflow:hidden;margin:0.5em 0;}}
+.progressbar > span{{display:block;height:100%;width:{pct}%;background:#2a8;}}
+.approve-btn{{background:#2a8;color:white;border:none;padding:6px 18px;border-radius:4px;cursor:pointer;font-weight:600;}}
+.decline-btn{{background:#e83;color:white;border:none;padding:6px 18px;border-radius:4px;cursor:pointer;font-weight:600;}}
+.decline-form{{display:none;background:#fff8f0;padding:0.5em;border:1px solid #e83;border-radius:4px;margin-top:0.5em;}}
+.decline-form.open{{display:block;}}
+</style>
+</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>QA walkthrough &mdash; doc {idx + 1} of {len(refs)}</h1>
+<p>
+  <span class='pill ok'>{prog["approved"]} approved</span>
+  <span class='pill warn'>{prog["declined"]} declined</span>
+  <span class='pill np'>{prog["pending"]} pending</span>
+  &middot; <a href='/qa-walkthrough/done'>summary</a>
+</p>
+<div class='progressbar'><span></span></div>
+{_action_result_html(action_result)}
+<p>
+  <code>{html.escape(doc_ref)}</code> &middot; {html.escape(filename[:80])} &middot;
+  {overlay_entity_count} entities ({redacted_entity_count} redacted) &middot;
+  {pdf_link}
+</p>
+<div class='walk'>
+  <div class='pane pane-original'><h2>Source (working/{html.escape(doc_ref)}.txt)</h2>{original_block}</div>
+  <div class='pane pane-redacted'><h2>Redacted (overlay projection)</h2>{redacted_block}</div>
+</div>
+<p style='margin-top:1em;'>
+  {nav_prev}
+  &nbsp;
+  <form method='POST' action='/api/qa-walkthrough/decide' style='display:inline;'>
+    <input type='hidden' name='doc_ref' value='{html.escape(doc_ref)}'>
+    <input type='hidden' name='idx' value='{idx}'>
+    <input type='hidden' name='decision' value='approve'>
+    <input type='hidden' name='reason_code' value='R007'>
+    <input type='hidden' name='note' value='QA walkthrough approve'>
+    <button class='approve-btn' type='submit'>&check; Approve &rarr;</button>
+  </form>
+  &nbsp;
+  <button class='decline-btn' onclick="document.getElementById('decline-form').classList.toggle('open');return false;">&times; Decline &hellip;</button>
+  &nbsp;
+  {nav_next}
+</p>
+<div id='decline-form' class='decline-form{decline_open}'>
+  <form method='POST' action='/api/qa-walkthrough/decide'>
+    <input type='hidden' name='doc_ref' value='{html.escape(doc_ref)}'>
+    <input type='hidden' name='idx' value='{idx}'>
+    <p>
+      <label>Decline reason
+        <select name='decision' required>
+          <option value=''>—</option>
+          <option value='request_reredaction'{(" selected" if existing_verdict == "request_reredaction" else "")}>Request re-redaction (something's wrong)</option>
+          <option value='mark_false_positive'{(" selected" if existing_verdict == "mark_false_positive" else "")}>Mark false positive (redacted something that shouldn't be)</option>
+          <option value='mark_missed_redaction'{(" selected" if existing_verdict == "mark_missed_redaction" else "")}>Mark missed redaction (didn't redact something it should have)</option>
+          <option value='escalate'{(" selected" if existing_verdict == "escalate" else "")}>Escalate to DPO</option>
+        </select>
+      </label>
+      &nbsp;
+      {_reason_code_select_html()}
+    </p>
+    <p><label>Feedback (required)<br><textarea name='note' rows='3' cols='80' required>{html.escape(existing_note)}</textarea></label></p>
+    <p><button class='decline-btn' type='submit'>Submit decline &rarr;</button></p>
+  </form>
+</div>
+{(f"<p class='meta'>existing decision: <b>{html.escape(existing_verdict)}</b> ({html.escape(existing_code)}) &mdash; {html.escape(existing_note[:120])}</p>" if existing_verdict else "")}
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_redaction_viewer(ctx: CaseContext, doc_ref: str) -> str:
     """Two-pane viewer projecting overlays from ``<ref>_tags.json``.
     Left pane is the verbatim original text; right pane shows the
@@ -2554,6 +2765,26 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, render_flag_review(ctx, ar))
             _LAST_ACTION_RESULT = None
             return
+        if url.path == "/qa-walkthrough" or url.path == "/qa-walkthrough/":
+            self._send(200, render_qa_walkthrough(ctx, None, ar))
+            _LAST_ACTION_RESULT = None
+            return
+        if url.path.startswith("/qa-walkthrough/"):
+            tail = url.path[len("/qa-walkthrough/") :]
+            if tail == "done":
+                # Summary view — pass None idx; if everything decided
+                # the render falls through to the summary branch.
+                self._send(200, render_qa_walkthrough(ctx, None, ar))
+                _LAST_ACTION_RESULT = None
+                return
+            try:
+                idx = int(tail)
+            except ValueError:
+                self._send(404, "<h1>404 qa-walkthrough: invalid index</h1>")
+                return
+            self._send(200, render_qa_walkthrough(ctx, idx, ar))
+            _LAST_ACTION_RESULT = None
+            return
         if url.path == "/flag-review/cluster":
             q = urllib.parse.parse_qs(url.query)
             text = (q.get("text") or [""])[0]
@@ -2755,6 +2986,74 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "command": "flag_review.decide_cluster",
                 }
             target = "/flag-review"
+        elif url.path == "/api/qa-walkthrough/build":
+            from dsar_orchestrator.local_broker import qa_walkthrough as qw
+
+            try:
+                size = int(form.get("size", "50"))
+            except ValueError:
+                size = 50
+            seed_raw = (form.get("seed", "") or "").strip()
+            try:
+                seed_val: int | None = int(seed_raw) if seed_raw else None
+            except ValueError:
+                seed_val = None
+            try:
+                refs = qw.build_sample(ctx.case_dir, size=size, seed=seed_val)
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": f"qa-walkthrough sample built: {len(refs)} docs",
+                    "stderr": "",
+                    "command": f"qa_walkthrough.build_sample(size={size}, seed={seed_val})",
+                }
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "qa_walkthrough.build_sample",
+                }
+            target = "/qa-walkthrough/0"
+        elif url.path == "/api/qa-walkthrough/decide":
+            from dsar_orchestrator.local_broker import qa_walkthrough as qw
+            from dsar_orchestrator.local_broker.qa_sample import record_qa_decision
+
+            doc_ref = form.get("doc_ref", "")
+            decision = form.get("decision", "")
+            reason_code = form.get("reason_code", "")
+            note = form.get("note", "")
+            try:
+                idx = int(form.get("idx", "0"))
+            except ValueError:
+                idx = 0
+            try:
+                record_qa_decision(
+                    ctx.case_dir,
+                    doc_ref=doc_ref,
+                    decision=decision,
+                    reason_code=reason_code,
+                    note=note,
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": f"qa-walkthrough {decision} recorded for {doc_ref}",
+                    "stderr": "",
+                    "command": f"qa_sample.record_qa_decision({decision!r})",
+                }
+                _safe_recompute_funnel(ctx.case_dir)
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "qa_sample.record_qa_decision",
+                }
+            # Advance to the next pending doc; if none, go to summary.
+            prog = qw.progress(ctx.case_dir)
+            next_idx = prog.get("next_pending_idx")
+            target = (
+                f"/qa-walkthrough/{next_idx}" if next_idx is not None else "/qa-walkthrough/done"
+            )
         elif url.path == "/api/flag-review/decide-instance":
             from dsar_orchestrator.local_broker.flag_review import decide_instance
 
