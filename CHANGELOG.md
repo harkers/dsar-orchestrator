@@ -6,6 +6,21 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-27
+
+### Added — Per-instance triage on the ambiguous-flag review screen (#115b, post-Phase 2)
+
+Completes the hybrid shape locked at #115 start: cluster mode by default, per-instance expand for context-dependent flags (same `(text, classification)` carrying different meaning across docs — e.g. "Smith" as the requester in some docs and an unrelated third party in others).
+
+- `flag_review.list_cluster_instances(case_dir, text, classification)` enumerates each matching `(doc_ref, start, end)` with surrounding-text snippets.
+- `flag_review.decide_instance(case_dir, doc_ref, start, end, text, classification, verdict, reason_code, note, operator_id)` records a per-instance verdict. Same chain-event + JSONL machinery as `decide_cluster`, keyed on coordinates and tagged `scope='instance'` for audit_verify. Raises `ValueError` on no-match so a stale-page click surfaces in `_LAST_ACTION_RESULT.stderr` rather than silently no-op-ing. `doc_ref` is operator-supplied via HTTP form — path traversal (`/`, `\`, leading `.`) is rejected.
+- New GET `/flag-review/cluster?text=X&cls=Y` page lists each instance with its snippet and a per-row verdict form.
+- New POST `/api/flag-review/decide-instance` route; redirects back to the cluster page.
+- "▸ see individual flags" link added to each cluster card on `/flag-review`.
+- Both routes phase-gated to `redact` via `ROUTE_PREFIX_REQUIRED_PHASE`.
+
+16 new tests; full suite 631 passing.
+
 ## [0.12.1] - 2026-05-27
 
 ### Added — Closure-letter auto-regeneration on metric change (#118, v3-console Phase 2)

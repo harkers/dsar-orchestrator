@@ -312,6 +312,222 @@ def decide_cluster(
     return row
 
 
+_SNIPPET_HALF_WINDOW = 60
+
+
+def list_cluster_instances(case_dir: Path, *, text: str, classification: str) -> list[dict]:
+    """Enumerate each flag entity matching ``(text, classification)`` for
+    per-instance triage. Sorted by ``(doc_ref, start)``. Each record::
+
+        {
+            "doc_ref": str,
+            "filename": str,
+            "start": int,
+            "end": int,
+            "snippet_before": str,   # up to 60 chars before the entity
+            "snippet_after": str,    # up to 60 chars after the entity
+        }
+
+    Snippets default to empty strings when the corresponding
+    ``working/<ref>.txt`` is missing — the page still renders, just
+    without surrounding context.
+    """
+    out: list[dict] = []
+    text_cache: dict[str, str | None] = {}
+    for path, payload in _iter_tag_files(case_dir):
+        ref = payload.get("ref") or path.name.removesuffix("_tags.json")
+        filename = payload.get("filename", "") or ""
+        matches = []
+        for e in payload.get("entities", []) or []:
+            if (
+                isinstance(e, dict)
+                and e.get("redact") == "flag"
+                and str(e.get("text", "")) == text
+                and str(e.get("classification", "")) == classification
+            ):
+                matches.append(e)
+        if not matches:
+            continue
+        if ref not in text_cache:
+            text_path = case_dir / "working" / f"{ref}.txt"
+            if text_path.exists():
+                try:
+                    text_cache[ref] = text_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text_cache[ref] = None
+            else:
+                text_cache[ref] = None
+        doc_text = text_cache[ref]
+        for e in matches:
+            try:
+                start = int(e["start"])
+                end = int(e["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            snippet_before = snippet_after = ""
+            if doc_text is not None:
+                snippet_before = doc_text[max(0, start - _SNIPPET_HALF_WINDOW) : start]
+                snippet_after = doc_text[end : end + _SNIPPET_HALF_WINDOW]
+            out.append(
+                {
+                    "doc_ref": ref,
+                    "filename": filename,
+                    "start": start,
+                    "end": end,
+                    "snippet_before": snippet_before,
+                    "snippet_after": snippet_after,
+                }
+            )
+    out.sort(key=lambda r: (r["doc_ref"], r["start"]))
+    return out
+
+
+def decide_instance(
+    case_dir: Path,
+    *,
+    doc_ref: str,
+    start: int,
+    end: int,
+    text: str,
+    classification: str,
+    verdict: str,
+    reason_code: str,
+    note: str,
+    operator_id: str,
+) -> dict:
+    """Apply ``verdict`` to a single flag entity at ``(doc_ref, start,
+    end)`` matching ``(text, classification)``.
+
+    Raises ``ValueError`` if no matching flag entity exists at those
+    coordinates — the operator is acting on a stale view and we'd
+    rather surface the mismatch than silently no-op.
+    """
+    if verdict not in VERDICTS:
+        raise ValueError(f"unknown verdict: {verdict!r} (allowed: {VERDICTS})")
+    # Reject doc_refs that could escape the working dir via path segments
+    # or leading dots — operator-supplied via HTTP form, treat as untrusted.
+    if not doc_ref or "/" in doc_ref or "\\" in doc_ref or doc_ref.startswith("."):
+        raise ValueError(f"invalid doc_ref {doc_ref!r}")
+    from dsar_orchestrator.local_broker.reason_codes import validate_reason_code
+
+    validate_reason_code(reason_code, note)
+
+    tag_path = case_dir / "working" / f"{doc_ref}_tags.json"
+    if not tag_path.exists():
+        raise ValueError(f"no matching flag entity at {doc_ref}:{start}:{end}")
+    try:
+        payload = json.loads(tag_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"tag file {tag_path} unreadable: {exc}") from exc
+
+    target_entity: dict | None = None
+    for e in payload.get("entities", []) or []:
+        if (
+            isinstance(e, dict)
+            and e.get("redact") == "flag"
+            and int(e.get("start", -1)) == start
+            and int(e.get("end", -1)) == end
+            and str(e.get("text", "")) == text
+            and str(e.get("classification", "")) == classification
+        ):
+            target_entity = e
+            break
+    if target_entity is None:
+        raise ValueError(f"no matching flag entity at {doc_ref}:{start}:{end}")
+
+    row = {
+        "ts": _iso_now(),
+        "scope": "instance",
+        "doc_ref": doc_ref,
+        "start": start,
+        "end": end,
+        "text": text,
+        "classification": classification,
+        "verdict": verdict,
+        "reason_code": reason_code,
+        "note": note,
+        "operator_id": operator_id,
+    }
+
+    from dsar_orchestrator.local_broker.audit_chain import (
+        emit_failure_for_case_dir,
+        emit_for_case_dir,
+    )
+
+    item_id = f"{doc_ref}:{start}:{end}"
+    original_hash = emit_for_case_dir(
+        case_dir,
+        decision_kind="flag_review",
+        payload=row,
+        item_id=item_id,
+    )
+
+    if verdict == "redact":
+        target_entity["redact"] = True
+    elif verdict == "preserve":
+        target_entity["redact"] = False
+    # escalate: leave 'flag' in place
+    if verdict in ("redact", "preserve"):
+        payload["flag_count"] = sum(
+            1
+            for e in payload.get("entities", [])
+            if isinstance(e, dict) and e.get("redact") == "flag"
+        )
+        payload["redact_count"] = sum(
+            1
+            for e in payload.get("entities", [])
+            if isinstance(e, dict) and e.get("redact") is True
+        )
+        tmp = tag_path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(tag_path)
+        except OSError as exc:
+            emit_failure_for_case_dir(
+                case_dir,
+                decision_kind="flag_review",
+                payload={
+                    "phase": "tag-file-rewrite-instance",
+                    "scope": "instance",
+                    "original_event_hash": original_hash,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "doc_ref": doc_ref,
+                    "start": start,
+                    "end": end,
+                },
+                item_id=item_id,
+            )
+            raise
+
+    decisions_path = _decisions_path(case_dir)
+    decisions_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with _DECISION_LOCK:
+            with decisions_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        emit_failure_for_case_dir(
+            case_dir,
+            decision_kind="flag_review",
+            payload={
+                "phase": "post-chain-jsonl-write",
+                "scope": "instance",
+                "original_event_hash": original_hash,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "target_path": str(decisions_path),
+                "doc_ref": doc_ref,
+                "start": start,
+                "end": end,
+            },
+            item_id=item_id,
+        )
+        raise
+
+    return row
+
+
 def load_decisions(case_dir: Path) -> list[dict]:
     """Return all rows from ``audit/flag_review_decisions.jsonl`` in
     write order. Empty list if the file doesn't exist."""

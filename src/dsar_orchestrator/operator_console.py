@@ -370,6 +370,7 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
 # this dict for any path that doesn't exact-match ROUTE_REQUIRED_PHASE.
 ROUTE_PREFIX_REQUIRED_PHASE: dict[str, str] = {
     "/redaction-viewer/": "redact",
+    "/flag-review/cluster": "redact",
 }
 
 
@@ -2294,10 +2295,12 @@ def render_flag_review(ctx: CaseContext, action_result: dict | None) -> str:
         doc_count = len(c["doc_refs"])
         sample_refs = ", ".join(html.escape(r) for r in c["doc_refs"][:5])
         more = f" (+{doc_count - 5} more)" if doc_count > 5 else ""
+        expand_qs = urllib.parse.urlencode({"text": c["text"], "cls": c["classification"]})
         cards.append(
             f"""<div class='card'>
   <p><b>{text_safe}</b> · <span class='meta'>{cls_safe}</span> · <span class='pill np'>{c["instance_count"]} instances</span> · across {doc_count} doc{"s" if doc_count != 1 else ""}</p>
   <p class='meta'>refs: {sample_refs}{more}</p>
+  <p class='meta'><a href='/flag-review/cluster?{html.escape(expand_qs)}'>▸ see individual flags</a></p>
   <form method='POST' action='/api/flag-review/decide'>
     <input type='hidden' name='text' value='{text_safe}'>
     <input type='hidden' name='classification' value='{cls_safe}'>
@@ -2334,6 +2337,73 @@ def render_flag_review(ctx: CaseContext, action_result: dict | None) -> str:
 {_action_result_html(action_result)}
 {"<p class='muted'>No ambiguous flags — nothing to review.</p>" if not clusters else ""}
 {"".join(cards)}
+{_footer(ctx)}
+</body></html>"""
+
+
+def render_flag_review_cluster(
+    ctx: CaseContext, *, text: str, classification: str, action_result: dict | None
+) -> str:
+    """Per-instance triage view for a single ``(text, classification)``
+    cluster. Each instance row gets its own verdict buttons so the
+    operator can resolve context-dependent flags one at a time."""
+    from dsar_orchestrator.local_broker.flag_review import list_cluster_instances
+    from dsar_orchestrator.local_broker.reason_codes import REASON_CODES
+
+    instances = list_cluster_instances(ctx.case_dir, text=text, classification=classification)
+
+    reason_options = "".join(
+        f"<option value='{html.escape(code)}'>{html.escape(code)} — {html.escape(entry['label'])}</option>"
+        for code, entry in REASON_CODES.items()
+    )
+
+    text_safe = html.escape(text)
+    cls_safe = html.escape(classification)
+
+    rows: list[str] = []
+    for inst in instances:
+        ref_safe = html.escape(inst["doc_ref"])
+        before_safe = html.escape(inst["snippet_before"])
+        after_safe = html.escape(inst["snippet_after"])
+        rows.append(
+            f"""<div class='card'>
+  <p><b>{ref_safe}</b> · <span class='meta'>{html.escape(inst["filename"])}</span> · offsets <code>{inst["start"]}–{inst["end"]}</code></p>
+  <p class='meta'>…{before_safe}<mark>{text_safe}</mark>{after_safe}…</p>
+  <form method='POST' action='/api/flag-review/decide-instance'>
+    <input type='hidden' name='doc_ref' value='{ref_safe}'>
+    <input type='hidden' name='start' value='{inst["start"]}'>
+    <input type='hidden' name='end' value='{inst["end"]}'>
+    <input type='hidden' name='text' value='{text_safe}'>
+    <input type='hidden' name='classification' value='{cls_safe}'>
+    <p>
+      <label>operator id <input type='text' name='operator_id' required></label>
+      <label>reason
+        <select name='reason_code' required>
+          <option value=''>—</option>
+          {reason_options}
+        </select>
+      </label>
+    </p>
+    <p><label>note <input type='text' name='note' size='60'></label></p>
+    <p>
+      <button class='btn btn-danger' name='verdict' value='redact' type='submit'>Redact this one</button>
+      <button class='btn' name='verdict' value='preserve' type='submit'>Preserve this one</button>
+      <button class='btn' name='verdict' value='escalate' type='submit'>Escalate</button>
+    </p>
+  </form>
+</div>"""
+        )
+
+    meta = load_case_metadata(ctx)
+    return f"""<!doctype html>
+<html><head><title>Flag instances · {text_safe} · {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>Per-instance triage · <code>{text_safe}</code> · {cls_safe}</h1>
+<p class='meta'><a href='/flag-review'>← back to cluster list</a> · {len(instances)} instance{"s" if len(instances) != 1 else ""}</p>
+{_action_result_html(action_result)}
+{"<p class='muted'>No flagged instances for this cluster — they may have all been decided.</p>" if not instances else ""}
+{"".join(rows)}
 {_footer(ctx)}
 </body></html>"""
 
@@ -2482,6 +2552,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if url.path == "/flag-review":
             self._send(200, render_flag_review(ctx, ar))
+            _LAST_ACTION_RESULT = None
+            return
+        if url.path == "/flag-review/cluster":
+            q = urllib.parse.parse_qs(url.query)
+            text = (q.get("text") or [""])[0]
+            cls = (q.get("cls") or [""])[0]
+            if not text or not cls:
+                self._send(400, "<h1>400 flag-review/cluster: missing text or cls</h1>")
+                return
+            self._send(
+                200,
+                render_flag_review_cluster(ctx, text=text, classification=cls, action_result=ar),
+            )
             _LAST_ACTION_RESULT = None
             return
         if url.path == "/waiver":
@@ -2672,6 +2755,57 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "command": "flag_review.decide_cluster",
                 }
             target = "/flag-review"
+        elif url.path == "/api/flag-review/decide-instance":
+            from dsar_orchestrator.local_broker.flag_review import decide_instance
+
+            doc_ref = form.get("doc_ref", "")
+            try:
+                start = int(form.get("start", "-1"))
+                end = int(form.get("end", "-1"))
+            except ValueError:
+                start = end = -1
+            text = form.get("text", "")
+            classification = form.get("classification", "")
+            verdict = form.get("verdict", "")
+            reason_code = form.get("reason_code", "")
+            note = form.get("note", "")
+            operator_id = form.get("operator_id", "")
+            try:
+                decide_instance(
+                    ctx.case_dir,
+                    doc_ref=doc_ref,
+                    start=start,
+                    end=end,
+                    text=text,
+                    classification=classification,
+                    verdict=verdict,
+                    reason_code=reason_code,
+                    note=note,
+                    operator_id=operator_id,
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": (
+                        f"flag-review {verdict} applied to {doc_ref}:{start}:{end} "
+                        f"({text!r} / {classification})"
+                    ),
+                    "stderr": "",
+                    "command": f"flag_review.decide_instance({verdict!r})",
+                }
+                _safe_recompute_funnel(ctx.case_dir)
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "flag_review.decide_instance",
+                }
+            target = (
+                "/flag-review/cluster?"
+                + urllib.parse.urlencode({"text": text, "cls": classification})
+                if text and classification
+                else "/flag-review"
+            )
         elif url.path == "/api/leak-review/retry":
             doc_ref = form.get("doc_ref", "")
             shim = _LeakCaseShim(case_dir=ctx.case_dir)
