@@ -358,6 +358,7 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
     "/unextractable": "discovery",
     "/leak-review": "redact",
     "/qa-sample": "redact",
+    "/flag-review": "redact",
     "/blockers": "release",
     "/release-check": "release",
     "/closure-letter": "release",
@@ -783,7 +784,7 @@ def _case_header(ctx: CaseContext, meta: dict) -> str:
         "</div>"
         "<nav>"
         "<a href='/'>Home</a>"
-        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a>"
+        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a>"
         "<a href='/release-check'>Release readiness</a>"
         "<a href='/pipeline'>Pipeline details</a>"
         "</nav></div>"
@@ -2227,6 +2228,75 @@ def render_waiver_dpo(ctx: CaseContext, action_result: dict | None) -> str:
 </body></html>"""
 
 
+def render_flag_review(ctx: CaseContext, action_result: dict | None) -> str:
+    """Cluster-mode review of ambiguous flags (``redact == 'flag'`` in
+    ``<ref>_tags.json``). Groups by ``(text, classification)`` so one
+    decision applies to every instance. Three verdicts per cluster:
+    ``redact`` rewrites every match to ``redact=True``; ``preserve``
+    rewrites to ``redact=False``; ``escalate`` defers and the cluster
+    remains visible."""
+    from dsar_orchestrator.local_broker.flag_review import cluster_flags
+    from dsar_orchestrator.local_broker.reason_codes import REASON_CODES
+
+    clusters = cluster_flags(ctx.case_dir)
+    total_instances = sum(c["instance_count"] for c in clusters)
+
+    reason_options = "".join(
+        f"<option value='{html.escape(code)}'>{html.escape(code)} — {html.escape(entry['label'])}</option>"
+        for code, entry in REASON_CODES.items()
+    )
+
+    cards: list[str] = []
+    for c in clusters:
+        text_safe = html.escape(c["text"])
+        cls_safe = html.escape(c["classification"])
+        doc_count = len(c["doc_refs"])
+        sample_refs = ", ".join(html.escape(r) for r in c["doc_refs"][:5])
+        more = f" (+{doc_count - 5} more)" if doc_count > 5 else ""
+        cards.append(
+            f"""<div class='card'>
+  <p><b>{text_safe}</b> · <span class='meta'>{cls_safe}</span> · <span class='pill np'>{c["instance_count"]} instances</span> · across {doc_count} doc{"s" if doc_count != 1 else ""}</p>
+  <p class='meta'>refs: {sample_refs}{more}</p>
+  <form method='POST' action='/api/flag-review/decide'>
+    <input type='hidden' name='text' value='{text_safe}'>
+    <input type='hidden' name='classification' value='{cls_safe}'>
+    <p>
+      <label>operator id <input type='text' name='operator_id' required></label>
+      <label>reason
+        <select name='reason_code' required>
+          <option value=''>—</option>
+          {reason_options}
+        </select>
+      </label>
+    </p>
+    <p><label>note <input type='text' name='note' size='60'></label></p>
+    <p>
+      <button class='btn btn-danger' name='verdict' value='redact' type='submit'>Redact all</button>
+      <button class='btn' name='verdict' value='preserve' type='submit'>Preserve all</button>
+      <button class='btn' name='verdict' value='escalate' type='submit'>Escalate</button>
+    </p>
+  </form>
+</div>"""
+        )
+
+    counts_line = (
+        f"{len(clusters)} cluster{'s' if len(clusters) != 1 else ''} · "
+        f"{total_instances} flagged instance{'s' if total_instances != 1 else ''}"
+    )
+    meta = load_case_metadata(ctx)
+    return f"""<!doctype html>
+<html><head><title>Flag review · {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>Ambiguous-flag review</h1>
+<p class='meta'>Entities the tagger marked <code>redact='flag'</code> — grouped by text + classification. One decision applies to every instance. {counts_line}.</p>
+{_action_result_html(action_result)}
+{"<p class='muted'>No ambiguous flags — nothing to review.</p>" if not clusters else ""}
+{"".join(cards)}
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_file_view(ctx: CaseContext, path_str: str) -> str | None:
     try:
         p = Path(path_str).resolve()
@@ -2368,6 +2438,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self._send(404, "<h1>404 redaction viewer: missing or invalid doc ref</h1>")
                 return
             self._send(200, render_redaction_viewer(ctx, doc_ref))
+            return
+        if url.path == "/flag-review":
+            self._send(200, render_flag_review(ctx, ar))
+            _LAST_ACTION_RESULT = None
             return
         if url.path == "/waiver":
             self._send(200, render_waiver(ctx, ar))
@@ -2516,6 +2590,43 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "command": "leak_review.record_decision",
                 }
             target = "/leak-review"
+        elif url.path == "/api/flag-review/decide":
+            from dsar_orchestrator.local_broker.flag_review import decide_cluster
+
+            text = form.get("text", "")
+            classification = form.get("classification", "")
+            verdict = form.get("verdict", "")
+            reason_code = form.get("reason_code", "")
+            note = form.get("note", "")
+            operator_id = form.get("operator_id", "")
+            try:
+                result = decide_cluster(
+                    ctx.case_dir,
+                    text=text,
+                    classification=classification,
+                    verdict=verdict,
+                    reason_code=reason_code,
+                    note=note,
+                    operator_id=operator_id,
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": (
+                        f"flag-review {verdict} applied to {result['instance_count']} "
+                        f"instance(s) of {text!r} ({classification}) across "
+                        f"{len(result['doc_refs'])} doc(s)"
+                    ),
+                    "stderr": "",
+                    "command": f"flag_review.decide_cluster({verdict!r})",
+                }
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "flag_review.decide_cluster",
+                }
+            target = "/flag-review"
         elif url.path == "/api/leak-review/retry":
             doc_ref = form.get("doc_ref", "")
             shim = _LeakCaseShim(case_dir=ctx.case_dir)

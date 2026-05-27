@@ -6,6 +6,32 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-27
+
+### Added — Ambiguous-flag review screen (#115, v3-console Phase 2)
+
+Operator console gains a `/flag-review` page that groups entities the tagger marked `redact='flag'` by `(text, classification)` so one verdict applies to every instance — at engagement scale this is ~16k flagged entities across thousands of docs, infeasible per-instance.
+
+Three verdicts per cluster:
+
+- `redact` — rewrites every matching entry to `redact=True` in each `<ref>_tags.json`.
+- `preserve` — rewrites every matching entry to `redact=False`.
+- `escalate` — leaves the tag entry as `'flag'` (deferred); records the deferral in the audit chain.
+
+Shape decision (operator confirmed before build): cluster mode by default; per-instance triage out of scope for this PR (follow-up #115b).
+
+Audit:
+- One hash-chained `REVIEWER_DECISION_MADE` event per cluster decision (stage=`flag_review`), payload names verdict, text/classification, instance_count, affected doc_refs.
+- One row per decision in `audit/flag_review_decisions.jsonl`.
+- Mirrors PR #114's compensating-failure pattern on JSONL append fail.
+- New compensating event on mid-loop tag-file write failure (`phase: tag-file-rewrite-partial`) so a partial-applied state is visible to `audit_verify` instead of silently drifting from the chain claim. Broker-review finding (code-qwen25, 2026-05-27).
+
+Route gating: `/flag-review` requires `redact` phase via `ROUTE_REQUIRED_PHASE`.
+
+New module: `dsar_orchestrator/local_broker/flag_review.py` (`cluster_flags`, `decide_cluster`, `load_decisions`).
+
+Tests: 18 new, covering cluster grouping, sort order, decided-cluster filtering, all three verdicts propagating correctly, atomic per-file rewrites, chain event + JSONL append, both compensating-failure paths, route gating, render output.
+
 ## [0.10.0] - 2026-05-27
 
 ### Added — Hard-Blocker Waiver workflow (#110, v3-console Phase 2)
