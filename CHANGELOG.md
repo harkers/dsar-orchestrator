@@ -6,6 +6,21 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-05-27
+
+### Added — compensating `FAILURE_RECORDED` chain event closes reverse-drift gap (#114, v3-console Phase 2)
+
+- Chain-first ordering (PR #104) prevents one direction of audit drift (no JSONL row without a chained `REVIEWER_DECISION_MADE` event). The reverse — chain emit succeeds then the JSONL/state append fails (disk full, EACCES mid-call) — leaves an orphan event in the hash chain that downstream `audit_verify` cannot correlate.
+- Fix: each of the three operator decision sites now wraps the post-chain user-visible write in `try/except OSError`. On failure it emits a compensating `FAILURE_RECORDED` event referencing the orphan event's `original_event_hash`, then re-raises.
+  - `leak_review.record_decision` → wraps `<case>/audit/leak_review_decisions.jsonl` append
+  - `unextractable.record_decision` → wraps `<case>/audit/unextractable_decisions.jsonl` append
+  - `operator_console.toggle_blocker_resolved` → wraps `<case>/audit/operator_console_state.json` save
+- Reuses the existing `AuditEventType.FAILURE_RECORDED` enum in the toolkit — no toolkit PR needed.
+- `audit_chain.py` factored: new private `_emit_typed(event_type, …)` helper backs the existing `emit_decision_event` plus new `emit_failure_event` / `emit_failure_for_case_dir` siblings. Behaviour of existing callers unchanged.
+- Compensating event payload (top-level after toolkit `append_event` merge): `phase=post-chain-jsonl-write` (or `-state-write`), `original_event_hash`, `error_type`, `error`, `target_path`, plus the relevant `doc_ref` / `source_path` / `blocker_id`. `stage` matches the decision kind for filtering. `prev_hash` of the compensating event equals `original_event_hash` (both events land sequentially under the same `_EMIT_LOCK` + `fcntl.flock`).
+- 4 new tests in `tests/test_compensating_failure_event.py` covering all three call sites' failure paths (monkeypatch `Path.open` / `Path.write_text` to raise `OSError`) plus a happy-path sanity. Suite: 541 passing (was 537; +4).
+- Version: pre-1.0 PATCH (small additive change, matches 0.9.6/0.9.7 cadence).
+
 ## [0.9.7] - 2026-05-26
 
 ### Fixed — unextractable.retry_extract crashed with TypeError after #105

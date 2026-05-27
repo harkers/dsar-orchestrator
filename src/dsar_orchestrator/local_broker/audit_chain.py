@@ -68,6 +68,36 @@ def resolve_case_id(case_dir: Path) -> str:
     return str(case_id)
 
 
+def _emit_typed(
+    case_dir: Path,
+    *,
+    event_type: AuditEventType,
+    decision_kind: str,
+    payload: dict,
+    case_id: str,
+    item_id: str | None,
+) -> str:
+    working = case_dir / "working"
+    working.mkdir(parents=True, exist_ok=True)
+    events_path = working / "audit_events.jsonl"
+    store = FileAuditStore(working)
+    with _EMIT_LOCK:
+        events_path.touch(exist_ok=True)
+        with events_path.open("rb") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                return store.append_event(
+                    event_type,
+                    payload=payload,
+                    case_id=case_id,
+                    agent="operator_console",
+                    item_id=item_id,
+                    stage=decision_kind,
+                )
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def emit_decision_event(
     case_dir: Path,
     *,
@@ -84,26 +114,37 @@ def emit_decision_event(
     Holds an in-process lock AND an advisory file lock on
     ``audit_events.jsonl`` for the duration of the append.
     """
-    working = case_dir / "working"
-    working.mkdir(parents=True, exist_ok=True)
-    events_path = working / "audit_events.jsonl"
-    store = FileAuditStore(working)
-    with _EMIT_LOCK:
-        # Touch + flock the events file to serialise across processes too.
-        events_path.touch(exist_ok=True)
-        with events_path.open("rb") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            try:
-                return store.append_event(
-                    AuditEventType.REVIEWER_DECISION_MADE,
-                    payload=payload,
-                    case_id=case_id,
-                    agent="operator_console",
-                    item_id=item_id,
-                    stage=decision_kind,
-                )
-            finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    return _emit_typed(
+        case_dir,
+        event_type=AuditEventType.REVIEWER_DECISION_MADE,
+        decision_kind=decision_kind,
+        payload=payload,
+        case_id=case_id,
+        item_id=item_id,
+    )
+
+
+def emit_failure_event(
+    case_dir: Path,
+    *,
+    decision_kind: str,
+    payload: dict,
+    case_id: str,
+    item_id: str | None = None,
+) -> str:
+    """Append a hash-chained ``FAILURE_RECORDED`` compensating event when
+    the post-chain user-visible write (JSONL row or state file) raises.
+    Closes the chain-event-without-JSONL-row drift gap noted in the module
+    docstring. Returns the canonical hash of the written event.
+    """
+    return _emit_typed(
+        case_dir,
+        event_type=AuditEventType.FAILURE_RECORDED,
+        decision_kind=decision_kind,
+        payload=payload,
+        case_id=case_id,
+        item_id=item_id,
+    )
 
 
 def emit_for_case_dir(
@@ -113,8 +154,26 @@ def emit_for_case_dir(
     payload: dict,
     item_id: str | None = None,
 ) -> str:
-    """Convenience: auto-resolve case_id then emit."""
+    """Convenience: auto-resolve case_id then emit a decision event."""
     return emit_decision_event(
+        case_dir,
+        decision_kind=decision_kind,
+        payload=payload,
+        case_id=resolve_case_id(case_dir),
+        item_id=item_id,
+    )
+
+
+def emit_failure_for_case_dir(
+    case_dir: Path,
+    *,
+    decision_kind: str,
+    payload: dict,
+    item_id: str | None = None,
+) -> str:
+    """Convenience: auto-resolve case_id then emit a compensating
+    FAILURE_RECORDED event."""
+    return emit_failure_event(
         case_dir,
         decision_kind=decision_kind,
         payload=payload,

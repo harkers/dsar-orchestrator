@@ -156,9 +156,12 @@ def record_decision(
         "note": note,
     }
     # Chain-first: if schema/IO breaks, the user-visible JSONL row is not written.
-    from dsar_orchestrator.local_broker.audit_chain import emit_for_case_dir
+    from dsar_orchestrator.local_broker.audit_chain import (
+        emit_failure_for_case_dir,
+        emit_for_case_dir,
+    )
 
-    emit_for_case_dir(
+    original_hash = emit_for_case_dir(
         ctx.case_dir,
         decision_kind="unextractable",
         payload=row,
@@ -166,9 +169,25 @@ def record_decision(
     )
     target = _decisions_file(ctx)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with _DECISION_LOCK:
-        with target.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    try:
+        with _DECISION_LOCK:
+            with target.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        emit_failure_for_case_dir(
+            ctx.case_dir,
+            decision_kind="unextractable",
+            payload={
+                "phase": "post-chain-jsonl-write",
+                "original_event_hash": original_hash,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "target_path": str(target),
+                "source_path": source_path,
+            },
+            item_id=source_path,
+        )
+        raise
     return row
 
 

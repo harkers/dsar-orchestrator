@@ -177,9 +177,12 @@ def record_decision(
         "note": note,
     }
     # Chain-first: if schema/IO breaks, the user-visible JSONL row is not written.
-    from dsar_orchestrator.local_broker.audit_chain import emit_for_case_dir
+    from dsar_orchestrator.local_broker.audit_chain import (
+        emit_failure_for_case_dir,
+        emit_for_case_dir,
+    )
 
-    emit_for_case_dir(
+    original_hash = emit_for_case_dir(
         ctx.case_dir,
         decision_kind="leak_review",
         payload=row,
@@ -187,9 +190,28 @@ def record_decision(
     )
     target = _decisions_file(ctx)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with _DECISION_LOCK:
-        with target.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    try:
+        with _DECISION_LOCK:
+            with target.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        # Chain has the decision event but the JSONL append failed; emit a
+        # compensating FAILURE_RECORDED event referencing the original hash
+        # so audit_verify can correlate the orphan event with its cause.
+        emit_failure_for_case_dir(
+            ctx.case_dir,
+            decision_kind="leak_review",
+            payload={
+                "phase": "post-chain-jsonl-write",
+                "original_event_hash": original_hash,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "target_path": str(target),
+                "doc_ref": doc_ref,
+            },
+            item_id=doc_ref,
+        )
+        raise
     return row
 
 
