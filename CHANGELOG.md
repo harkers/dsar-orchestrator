@@ -6,6 +6,19 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-27
+
+### Added — Closure-letter auto-regeneration on metric change (#118, v3-console Phase 2)
+
+`closure_letter.draft_letter` now sources its canonical funnel numbers from `metrics.recompute_funnel` (added in #117). Two new sections at the top of the letter:
+
+- **Live funnel snapshot** — six-row mini-table with the canonical counts. Calling `recompute_funnel` here also refreshes `audit/corpus_metrics.json` so downstream readers see consistent numbers.
+- **Corpus scale processed** — word and document counts sourced from the persisted snapshot via `metrics.read_metrics_snapshot`. Reads only; never recomputes on render (the heavier scale recompute runs lazily on `/pipeline`). Omits gracefully when the snapshot is missing or has no `scale` sub-tree.
+
+The existing rich "Document funnel" table and narrative body keep their `compute_funnel` sourcing — they need richer numbers (dedupe, PII totals) that aren't in the canonical six.
+
+6 new tests in `tests/test_closure_letter.py`. Full suite 615 passing.
+
 ## [0.12.0] - 2026-05-27
 
 ### Added — Live metric refresh on decision change (#117, v3-console Phase 2)

@@ -133,12 +133,14 @@ def compute_funnel(ctx: _CaseShim) -> dict[str, int]:
     leak_failures = sum(
         1
         for r in redaction
-        if r.get("status") == "failed" and (not canonical_refs or r.get("doc_ref") in canonical_refs)
+        if r.get("status") == "failed"
+        and (not canonical_refs or r.get("doc_ref") in canonical_refs)
     )
     redacted_ok_canonical = sum(
         1
         for r in redaction
-        if r.get("status") == "redacted" and (not canonical_refs or r.get("doc_ref") in canonical_refs)
+        if r.get("status") == "redacted"
+        and (not canonical_refs or r.get("doc_ref") in canonical_refs)
     )
 
     # PII entity totals
@@ -247,9 +249,7 @@ def _readiness_banner(state: str, verdict: dict | None) -> str:
             "review before any release decision. This draft is provisional."
         )
     if state == "case_closed":
-        return (
-            "> ✓ **Case closed.** This letter has been dispatched (see audit log)."
-        )
+        return "> ✓ **Case closed.** This letter has been dispatched (see audit log)."
     return (
         "> ⓘ **DRAFT — Approver hasn't run yet.** Visit /release-check to "
         "generate the readiness verdict, then return here."
@@ -264,9 +264,64 @@ def _load_case_context(ctx: _CaseShim) -> dict:
     return _read_json(ctx.working / "case_context.json") or {}
 
 
+def _live_funnel_snapshot_block(case_dir: Path) -> str:
+    """Render the six-row canonical funnel sourced from
+    ``metrics.recompute_funnel``. Side-effect: refreshes
+    ``audit/corpus_metrics.json``."""
+    from dsar_orchestrator.local_broker.metrics import recompute_funnel
+
+    f = recompute_funnel(case_dir)
+    return (
+        "## Live funnel snapshot\n\n"
+        "Canonical counts from `audit/corpus_metrics.json`, refreshed on each "
+        "operator decision and each letter render.\n\n"
+        "| Stage | Count |\n"
+        "|---|---:|\n"
+        f"| Ingested | **{f['ingested']:,}** |\n"
+        f"| In scope (Durant biographical) | **{f['in_scope']:,}** |\n"
+        f"| Redacted | **{f['redacted']:,}** |\n"
+        f"| Leak-excluded | **{f['leak_excluded']:,}** |\n"
+        f"| QA decided | **{f['qa_decided']:,}** |\n"
+        f"| Final disclosure | **{f['final']:,}** |\n"
+    )
+
+
+def _corpus_scale_block(case_dir: Path) -> str:
+    """Render the 'Corpus scale processed' section sourced from the
+    persisted ``audit/corpus_metrics.json`` snapshot. Reads only — never
+    recomputes here per spec (use whatever's there).
+
+    Omits gracefully when the snapshot is missing or has no ``scale``
+    sub-tree (the heavier scale recompute runs lazily from
+    ``/pipeline`` render, not on every letter draft).
+    """
+    from dsar_orchestrator.local_broker.metrics import read_metrics_snapshot
+
+    snap = read_metrics_snapshot(case_dir)
+    if not snap:
+        return ""
+    scale = snap.get("scale")
+    if not scale:
+        return ""
+    word_count = scale.get("word_count", 0)
+    doc_count = scale.get("doc_count", 0)
+    computed_at = scale.get("computed_at", "(unknown)")
+    return (
+        "## Corpus scale processed\n\n"
+        "Heavier word and document counts from the extracted text — recomputed "
+        "lazily on the `/pipeline` page, not on each letter render.\n\n"
+        f"- Documents with extracted text: **{doc_count:,}**\n"
+        f"- Aggregate word count: **{word_count:,}**\n"
+        f"- Snapshot computed: `{computed_at}`\n"
+    )
+
+
 def draft_letter(ctx: _CaseShim) -> str:
     """Generate the markdown draft from case state."""
     funnel = compute_funnel(ctx)
+    live_snapshot_block = _live_funnel_snapshot_block(ctx.case_dir)
+    corpus_scale_block = _corpus_scale_block(ctx.case_dir)
+    corpus_scale_section = f"---\n\n{corpus_scale_block}\n---" if corpus_scale_block else "---"
     verdict = latest_approver_verdict(ctx)
     state = readiness_state(ctx)
     banner = _readiness_banner(state, verdict)
@@ -287,15 +342,23 @@ def draft_letter(ctx: _CaseShim) -> str:
     f = funnel  # shorthand
 
     leak_paragraph = (
-        "Three further items could not be confirmed as safely redacted within "
-        "the response timeline. These have been set aside for review and, where "
-        "appropriate, will be supplied in a supplementary response or held back "
-        "under an applicable exemption with a separate explanation."
-    ) if f["leak_failures_canonical"] > 0 else ""
+        (
+            "Three further items could not be confirmed as safely redacted within "
+            "the response timeline. These have been set aside for review and, where "
+            "appropriate, will be supplied in a supplementary response or held back "
+            "under an applicable exemption with a separate explanation."
+        )
+        if f["leak_failures_canonical"] > 0
+        else ""
+    )
     closing_caveat = (
-        ", subject to any supplementary material to be provided in respect of "
-        "the items referred to above"
-    ) if f["leak_failures_canonical"] > 0 else ""
+        (
+            ", subject to any supplementary material to be provided in respect of "
+            "the items referred to above"
+        )
+        if f["leak_failures_canonical"] > 0
+        else ""
+    )
     return f"""# DSAR Closure Letter — DRAFT
 
 **Case:** {case_id}
@@ -309,26 +372,29 @@ def draft_letter(ctx: _CaseShim) -> str:
 
 ---
 
+{live_snapshot_block}
+{corpus_scale_section}
+
 ## Document funnel (live from case state)
 
 | Stage | Count | Explanation |
 |---|---:|---|
-| Initial data points identified | **{f['source_attempted']:,}** | Raw files across the in-scope systems |
-| Items unextractable / outside scope | **{f['extraction_failed']:,}** | Encrypted, unsupported, or corrupt files set aside |
-| Documents / artefacts selected for review | **{f['ingested']:,}** | Substantive review population after extraction |
-| Duplicates removed (Message-ID match) | **{f['duplicates_removed']:,}** | Cross-mailbox copies of the same logical email |
-| Unique artefacts reviewed | **{f['unique_after_dedupe']:,}** | De-duplicated review population |
-| Artefacts containing requester personal data | **{f['biographical_canonical']:,}** | Substantive content about the requester — included in disclosure bundle |
-| Artefacts mentioning requester only incidentally | **{f['incidental_canonical']:,}** | Subject named only as sender / recipient / cc / distribution member; substantive content concerns other matters |
-| Artefacts withheld pending operator review | **{f['leak_failures_canonical']:,}** | Leak verification could not confirm safe redaction |
-| **Final disclosure items** | **{f['final_disclosure_items']:,}** | Net items released in the disclosure bundle |
+| Initial data points identified | **{f["source_attempted"]:,}** | Raw files across the in-scope systems |
+| Items unextractable / outside scope | **{f["extraction_failed"]:,}** | Encrypted, unsupported, or corrupt files set aside |
+| Documents / artefacts selected for review | **{f["ingested"]:,}** | Substantive review population after extraction |
+| Duplicates removed (Message-ID match) | **{f["duplicates_removed"]:,}** | Cross-mailbox copies of the same logical email |
+| Unique artefacts reviewed | **{f["unique_after_dedupe"]:,}** | De-duplicated review population |
+| Artefacts containing requester personal data | **{f["biographical_canonical"]:,}** | Substantive content about the requester — included in disclosure bundle |
+| Artefacts mentioning requester only incidentally | **{f["incidental_canonical"]:,}** | Subject named only as sender / recipient / cc / distribution member; substantive content concerns other matters |
+| Artefacts withheld pending operator review | **{f["leak_failures_canonical"]:,}** | Leak verification could not confirm safe redaction |
+| **Final disclosure items** | **{f["final_disclosure_items"]:,}** | Net items released in the disclosure bundle |
 
 Supporting PII metrics (across the included documents):
 
-- Total personal-data entities detected: **{f['pii_entities_total']:,}**
-- Third-party PII redactions applied: **{f['pii_redact_third_party']:,}**
-- Items flagged for operator review: **{f['pii_flag_for_review']:,}**
-- Requester's own identifiers preserved: **{f['pii_subject_preserved']:,}**
+- Total personal-data entities detected: **{f["pii_entities_total"]:,}**
+- Third-party PII redactions applied: **{f["pii_redact_third_party"]:,}**
+- Items flagged for operator review: **{f["pii_flag_for_review"]:,}**
+- Requester's own identifiers preserved: **{f["pii_subject_preserved"]:,}**
 
 ---
 
@@ -365,30 +431,30 @@ Supporting PII metrics (across the included documents):
 >
 > **Search and review methodology**
 >
-> As part of our search and review process, we identified **{f['source_attempted']:,}**
+> As part of our search and review process, we identified **{f["source_attempted"]:,}**
 > initial data points across the in-scope systems. These data points
 > included emails, attachments, spreadsheets, documents, and other
 > potentially relevant artefacts.
 >
-> Following initial filtering, **{f['extraction_failed']:,}** items were set
+> Following initial filtering, **{f["extraction_failed"]:,}** items were set
 > aside as they could not be reliably extracted for review (encrypted or
 > password-protected files, unsupported file formats, and similar technical
-> exclusions). The remaining **{f['ingested']:,}** documents and artefacts
+> exclusions). The remaining **{f["ingested"]:,}** documents and artefacts
 > were taken forward for substantive review.
 >
-> We then identified and removed **{f['duplicates_removed']:,}** duplicate or
+> We then identified and removed **{f["duplicates_removed"]:,}** duplicate or
 > substantially duplicate items. Many of these were copies of the same
 > email present in multiple mailboxes because they had been sent to,
 > copied to, or forwarded among several recipients — once de-duplicated
 > these collapse to a single representative item. This left
-> **{f['unique_after_dedupe']:,}** unique artefacts for substantive assessment.
+> **{f["unique_after_dedupe"]:,}** unique artefacts for substantive assessment.
 >
-> Of those **{f['unique_after_dedupe']:,}** unique artefacts,
-> **{f['biographical_canonical']:,}** were assessed as containing personal
+> Of those **{f["unique_after_dedupe"]:,}** unique artefacts,
+> **{f["biographical_canonical"]:,}** were assessed as containing personal
 > data relating to you and have been included in the disclosure bundle,
 > subject to any necessary redactions.
 >
-> A further **{f['incidental_canonical']:,}** artefacts mentioned your name,
+> A further **{f["incidental_canonical"]:,}** artefacts mentioned your name,
 > email address, role, or work involvement but were assessed as not
 > requiring disclosure because the content did not relate to you as an
 > individual for the purposes of the right of access. These included, for
@@ -496,12 +562,12 @@ This auto-draft updates whenever case state changes. Operator must still:
 
 1. [ ] Identity verification document/record attached to the case file
 2. [ ] Statutory deadline recorded in `working/case_context.json`
-3. [ ] {f['pii_flag_for_review']:,} flag-for-review PII entities triaged
-4. [ ] {f['leak_failures_canonical']:,} leak-failure documents resolved (remediated, supplementary, or withheld with documented exemption)
+3. [ ] {f["pii_flag_for_review"]:,} flag-for-review PII entities triaged
+4. [ ] {f["leak_failures_canonical"]:,} leak-failure documents resolved (remediated, supplementary, or withheld with documented exemption)
 5. [ ] This response letter finalised (name, role, retention specifics)
 6. [ ] Internal report drafted
 7. [ ] Metadata-strip audit on the redacted/ tree
-8. [ ] Disclosure pack filtered to the **{f['final_disclosure_items']:,} canonical biographical refs** (drop duplicate copies + leak-failures)
+8. [ ] Disclosure pack filtered to the **{f["final_disclosure_items"]:,} canonical biographical refs** (drop duplicate copies + leak-failures)
 9. [ ] DSAR Approver re-run after blockers resolved; verdict APPROVE_FOR_HUMAN_SIGNOFF
 10. [ ] DPO / Privacy Lead sign-off recorded
 """
