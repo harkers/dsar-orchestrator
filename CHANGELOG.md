@@ -6,6 +6,22 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-05-27
+
+### Added — two-panel redaction viewer (#109, v3-console Phase 2)
+
+- New `local_broker/redaction_viewer.py` projects redaction overlays from the existing `<case>/working/<ref>_tags.json` files (produced by `pii_tagger_mini` / toolkit `detect.py`) at render time. No new persisted artefacts, no toolkit changes — decision broker-locked as Option C earlier in v3 design.
+- Code badges pin to the v3 jury synthesis taxonomy: `DS` (data subject), `TP` (third party), `SC` (special category), `CH` (child), `AE` (adverse event), `LC` (legal counsel), `CC` (organisation / client confidential), `NR` (needs review), `SEC` (security).
+  - Default mapping in `REDACTION_CODE_MAP`: `data_subject→DS`, `third_party→TP`, `organisation→CC`, `client_confidential→CC`, `special_category→SC`, `child→CH`, `adverse_event→AE`, `legal_counsel→LC`, `security→SEC`.
+  - `redact == "flag"` overrides classification → always `NR` so ambiguous entities stand out in the redacted pane.
+  - Unmapped classification → `NR` (operator should triage rather than miss).
+- `build_overlay(case_dir, doc_ref) -> dict` returns `{doc_ref, filename, exists, entities: [{start, end, text, classification, redact, code}, ...]}` sorted by `start` asc. Missing/corrupt tag file → `exists=False, entities=[]` (no exception).
+- `render_redacted_html(text, overlay)` emits `<span data-code="X" data-start="N" data-end="M">[X]</span>` overlays only for entities where `redact in (True, "flag")`. Entities with `redact == False` (data-subject preserve) appear verbatim — matches the toolkit's actual redaction output. Outside-overlay text is `html.escape`d so the pane is XSS-safe.
+- New `/redaction-viewer/<ref>` GET route in `operator_console`. Two-pane layout: left pane original text (verbatim), right pane redacted view with spans + colour-coded codes. Graceful empty-pane fallback when the text or tag file is missing.
+- New `ROUTE_PREFIX_REQUIRED_PHASE: dict[str, str]` registers phase gating for dynamic-suffix routes; `is_route_accessible` consults it after exact-match fails. `/redaction-viewer/` requires min phase `redact`.
+- 14 new tests in `tests/test_redaction_viewer.py` covering: `classify_code` mapping + flag-override + unknown→NR; `build_overlay` sort order, missing file, missing offsets, corrupt JSON; `render_redacted_html` redact-true spans, redact-false verbatim, flag→NR, XSS escaping; route end-to-end (both panes + missing-text fallback + phase gate). Suite: 555 passing (was 541; +14).
+- Version: pre-1.0 PATCH.
+
 ## [0.9.8] - 2026-05-27
 
 ### Added — compensating `FAILURE_RECORDED` chain event closes reverse-drift gap (#114, v3-console Phase 2)
