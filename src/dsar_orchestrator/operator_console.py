@@ -362,6 +362,12 @@ ROUTE_REQUIRED_PHASE: dict[str, str] = {
     "/closure-letter": "release",
 }
 
+# Phase gating for dynamic-suffix routes. ``is_route_accessible`` consults
+# this dict for any path that doesn't exact-match ROUTE_REQUIRED_PHASE.
+ROUTE_PREFIX_REQUIRED_PHASE: dict[str, str] = {
+    "/redaction-viewer/": "redact",
+}
+
 
 def current_phase_key(state: dict) -> str:
     """Return the phase key matching ``state['current_stage']``. Unknown
@@ -386,6 +392,11 @@ def is_route_accessible(state: dict, path: str) -> tuple[bool, str | None]:
     later phase. ``msg`` names both the current and required phase so the
     redirect banner can be self-explanatory."""
     required_key = ROUTE_REQUIRED_PHASE.get(path)
+    if not required_key:
+        for prefix, key in ROUTE_PREFIX_REQUIRED_PHASE.items():
+            if path.startswith(prefix):
+                required_key = key
+                break
     if not required_key:
         return True, None
     required_idx = _PHASE_INDEX[required_key]
@@ -2012,6 +2023,73 @@ def render_leak_review(ctx: CaseContext, action_result: dict | None) -> str:
 </body></html>"""
 
 
+def render_redaction_viewer(ctx: CaseContext, doc_ref: str) -> str:
+    """Two-pane viewer projecting overlays from ``<ref>_tags.json``.
+    Left pane is the verbatim original text; right pane shows the
+    redacted view with ``[CODE]`` span overlays where the toolkit
+    would replace text. Empty-pane fallback when text or tags missing."""
+    from dsar_orchestrator.local_broker.redaction_viewer import (
+        build_overlay,
+        render_original_html,
+        render_redacted_html,
+    )
+
+    ref_safe = html.escape(doc_ref)
+    overlay = build_overlay(ctx.case_dir, doc_ref)
+    text_path = ctx.case_dir / "working" / f"{doc_ref}.txt"
+    if text_path.exists():
+        try:
+            text = text_path.read_text(encoding="utf-8")
+            text_missing = False
+        except OSError:
+            text = ""
+            text_missing = True
+    else:
+        text = ""
+        text_missing = True
+
+    if text_missing:
+        original_block = "<p class='muted'>no text — source extraction missing for this ref</p>"
+        redacted_block = "<p class='muted'>no text — source extraction missing for this ref</p>"
+    else:
+        original_block = render_original_html(text)
+        if overlay["exists"]:
+            redacted_block = render_redacted_html(text, overlay)
+        else:
+            redacted_block = (
+                "<p class='muted'>no tags file — pii_tagger hasn't seen this ref yet</p>"
+                + render_original_html(text)
+            )
+
+    tag_summary = (
+        f"<span class='meta'>{len(overlay['entities'])} entities · "
+        f"{sum(1 for e in overlay['entities'] if e['redact'] in (True, 'flag'))} redacted</span>"
+        if overlay["exists"]
+        else "<span class='meta'>no tag file</span>"
+    )
+
+    return f"""<!doctype html>
+<html><head><title>Redaction viewer · {ref_safe}</title>
+<style>
+body{{font-family:system-ui;margin:1em;}}
+.viewer{{display:grid;grid-template-columns:1fr 1fr;gap:1em;}}
+.pane-original,.pane-redacted{{border:1px solid #ccc;padding:0.5em;white-space:pre-wrap;font-family:monospace;font-size:0.9em;overflow-x:auto;}}
+.pane-original h2,.pane-redacted h2{{margin-top:0;font-size:0.95em;}}
+span[data-code]{{background:#fee;color:#900;padding:1px 4px;border-radius:3px;font-weight:bold;}}
+span[data-code="NR"]{{background:#ffd;color:#960;}}
+span[data-code="DS"]{{background:#efe;color:#060;}}
+.meta{{color:#666;font-size:0.85em;}}
+</style></head><body>
+<h1>Redaction viewer · {ref_safe}</h1>
+<p>{tag_summary} · filename: <code>{html.escape(overlay["filename"] or "?")}</code></p>
+<div class="viewer">
+  <div class="pane-original"><h2>Original</h2>{original_block}</div>
+  <div class="pane-redacted"><h2>Redacted</h2>{redacted_block}</div>
+</div>
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_file_view(ctx: CaseContext, path_str: str) -> str | None:
     try:
         p = Path(path_str).resolve()
@@ -2081,8 +2159,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         ctx = self._ctx()
         # Stage-rail enforcement: deep-links past the current phase 303
-        # back to the landing page with a banner explaining why.
-        if url.path in ROUTE_REQUIRED_PHASE:
+        # back to the landing page with a banner explaining why. Also
+        # covers dynamic-suffix routes registered in ROUTE_PREFIX_REQUIRED_PHASE
+        # (e.g. /redaction-viewer/<ref>).
+        gated = url.path in ROUTE_REQUIRED_PHASE or any(
+            url.path.startswith(prefix) for prefix in ROUTE_PREFIX_REQUIRED_PHASE
+        )
+        if gated:
             state = load_orchestrator_state(ctx)
             allowed, msg = is_route_accessible(state, url.path)
             if not allowed:
@@ -2141,6 +2224,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self._send(404, "<h1>404 file not found / not in case dir</h1>")
             else:
                 self._send(200, body)
+            return
+        if url.path.startswith("/redaction-viewer/"):
+            doc_ref = url.path[len("/redaction-viewer/") :]
+            if not doc_ref or "/" in doc_ref:
+                self._send(404, "<h1>404 redaction viewer: missing or invalid doc ref</h1>")
+                return
+            self._send(200, render_redaction_viewer(ctx, doc_ref))
             return
         self._send(404, "<h1>404</h1>")
 
