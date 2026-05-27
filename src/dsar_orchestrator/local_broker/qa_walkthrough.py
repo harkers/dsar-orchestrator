@@ -30,6 +30,67 @@ def _sample_path(case_dir: Path) -> Path:
     return case_dir / "audit" / _SAMPLE_FILENAME
 
 
+def load_redacted_text(case_dir: Path, doc_ref: str) -> tuple[str, str]:
+    """Return ``(extracted_text, source_label)`` for what was actually
+    redacted and is going into the disclosure pack.
+
+    Reads the artefact in ``<case>/redacted/`` for the given ref.
+    .eml — extract the text/plain body via the stdlib email parser
+    (handles the toolkit's redact_msg output, which is the dominant
+    format in this case at ~849 of 853 docs).
+    .pdf — extract text with PyMuPDF.
+    .html / .txt — read directly.
+    Other formats — return an empty string with a label so the caller
+    can show a fallback / "open exported PDF" link instead.
+
+    Importantly distinct from the #109 overlay projection (which maps
+    tag spans onto ``working/<ref>.txt``): the overlay shows what the
+    tagger said to do, not what the actual redactor did. For QA the
+    operator needs to see exactly what's going out.
+    """
+    red_dir = case_dir / "redacted"
+    if not red_dir.exists():
+        return "", "no /redacted/ dir"
+    # Match by ref prefix (filenames are "<ref>_<original-filename>.<ext>")
+    matches = sorted(red_dir.glob(f"{doc_ref}_*"))
+    if not matches:
+        return "", "no redacted artefact found"
+    path = matches[0]
+    suffix = path.suffix.lower()
+
+    if suffix == ".eml":
+        # The toolkit's redact_msg writes pseudo-email plain text where
+        # the From/To/Cc fields contain [R1]-style placeholders, e.g.
+        # `From: [R1] <[R1]>`. That's NOT RFC-2822-strict — Python's
+        # `email.policy.default` parser drops the malformed addr-specs to
+        # `<>`. We want the raw redacted text exactly as it'd ship out, so
+        # read it verbatim.
+        try:
+            return path.read_text(encoding="utf-8", errors="replace"), f"redacted/{path.name}"
+        except OSError as exc:
+            return f"[error reading redacted .eml: {exc}]", f"redacted/{path.name}"
+
+    if suffix == ".pdf":
+        try:
+            import fitz  # PyMuPDF
+
+            d = fitz.open(path)
+            pages = [p.get_text() for p in d]
+            d.close()
+            return "\n\n".join(pages), f"redacted/{path.name}"
+        except Exception as exc:  # noqa: BLE001
+            return f"[error reading redacted .pdf: {exc}]", f"redacted/{path.name}"
+
+    if suffix in (".html", ".htm", ".txt", ".csv"):
+        try:
+            return path.read_text(encoding="utf-8", errors="replace"), f"redacted/{path.name}"
+        except OSError as exc:
+            return f"[error reading {path.name}: {exc}]", f"redacted/{path.name}"
+
+    # docx / xlsx / pptx / other — operator should view the exported PDF.
+    return "", f"redacted/{path.name} ({suffix}; open exported PDF for full view)"
+
+
 def _redacted_refs(case_dir: Path) -> list[dict]:
     """Return register entries with ``status == 'redacted'`` or
     ``'exported'`` (post-export the status flips to exported but the

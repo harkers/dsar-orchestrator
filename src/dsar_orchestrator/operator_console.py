@@ -2154,9 +2154,21 @@ def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict
 
     overlay = build_overlay(ctx.case_dir, doc_ref)
     original_block = render_original_html(source_text)
-    redacted_block = (
-        render_redacted_html(source_text, overlay) if overlay["exists"] else original_block
-    )
+    # Right pane: prefer the ACTUAL redacted artefact (what's going into
+    # the disclosure pack). The overlay projection over-reports leaks
+    # because the toolkit's redact_msg / docx_to_pdf / xlsx_to_pdf do
+    # more than span-replace (signature collapse, HTML→text reflow, etc).
+    # If the redacted artefact can't be read (rare format / IO error)
+    # fall back to overlay projection so the page still renders.
+    redacted_text, redacted_source_label = qw.load_redacted_text(ctx.case_dir, doc_ref)
+    if redacted_text:
+        redacted_block = render_original_html(redacted_text)
+    elif overlay["exists"]:
+        redacted_block = render_redacted_html(source_text, overlay)
+        redacted_source_label = redacted_source_label or "fallback: overlay projection from tags"
+    else:
+        redacted_block = "[no redacted artefact and no tags overlay available]"
+        redacted_source_label = redacted_source_label or "no redacted artefact"
 
     reg_path = ctx.case_dir / "working" / "register.json"
     filename = doc_ref
@@ -2206,7 +2218,8 @@ def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict
 <style>
 .walk{{display:grid;grid-template-columns:1fr 1fr;gap:1em;}}
 .walk .pane{{border:1px solid #ccc;padding:0.5em;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;height:60vh;overflow:auto;}}
-.walk h2{{margin-top:0;font-size:0.9em;}}
+.walk h2{{margin:0 0 0.4em 0;font-size:0.9em;}}
+.walk h2 .meta{{font-weight:normal;color:#666;}}
 .walk span[data-code]{{background:#fee;color:#900;padding:1px 4px;border-radius:3px;font-weight:bold;}}
 .walk span[data-code="NR"]{{background:#ffd;color:#960;}}
 .walk span[data-code="DS"]{{background:#efe;color:#060;}}
@@ -2216,6 +2229,13 @@ def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict
 .decline-btn{{background:#e83;color:white;border:none;padding:6px 18px;border-radius:4px;cursor:pointer;font-weight:600;}}
 .decline-form{{display:none;background:#fff8f0;padding:0.5em;border:1px solid #e83;border-radius:4px;margin-top:0.5em;}}
 .decline-form.open{{display:block;}}
+.leak-list{{margin:0.5em 0;padding:0.4em;border:1px dashed #e83;border-radius:4px;background:#fff;min-height:2em;}}
+.leak-list .chip{{display:inline-block;background:#fde;color:#722;padding:2px 6px;margin:2px;border-radius:3px;font-family:ui-monospace,monospace;font-size:0.85em;cursor:pointer;}}
+.leak-list .chip:hover{{background:#fcc;}}
+.leak-list .chip::after{{content:" ×";color:#a44;}}
+.leak-list .empty{{color:#999;font-style:italic;}}
+.pane-redacted{{user-select:text;}}
+.tip{{color:#555;font-size:0.85em;font-style:italic;}}
 </style>
 </head>
 <body>
@@ -2234,9 +2254,14 @@ def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict
   {overlay_entity_count} entities ({redacted_entity_count} redacted) &middot;
   {pdf_link}
 </p>
+<p class='tip'>Right pane shows the <b>actual redacted artefact</b> ({html.escape(redacted_source_label)}). <b>Double-click any word that leaked</b> — it's added to the leak-terms list below; submit with Decline.</p>
 <div class='walk'>
-  <div class='pane pane-original'><h2>Source (working/{html.escape(doc_ref)}.txt)</h2>{original_block}</div>
-  <div class='pane pane-redacted'><h2>Redacted (overlay projection)</h2>{redacted_block}</div>
+  <div class='pane pane-original'><h2>Source <span class='meta'>working/{html.escape(doc_ref)}.txt</span></h2>{original_block}</div>
+  <div class='pane pane-redacted' id='pane-redacted'><h2>Redacted <span class='meta'>{html.escape(redacted_source_label)}</span></h2>{redacted_block}</div>
+</div>
+<div id='leak-list-wrap'>
+  <p style='margin-bottom:0.2em;'><b>Leak terms collected from the redacted pane</b> <span class='meta'>(double-click words on the right; click a chip to remove)</span></p>
+  <div class='leak-list' id='leak-list'><span class='empty'>none yet — double-click a leaked word in the right pane to add</span></div>
 </div>
 <p style='margin-top:1em;'>
   {nav_prev}
@@ -2255,27 +2280,89 @@ def render_qa_walkthrough(ctx: CaseContext, idx: int | None, action_result: dict
   {nav_next}
 </p>
 <div id='decline-form' class='decline-form{decline_open}'>
-  <form method='POST' action='/api/qa-walkthrough/decide'>
+  <form method='POST' action='/api/qa-walkthrough/decide' id='decline-form-el'>
     <input type='hidden' name='doc_ref' value='{html.escape(doc_ref)}'>
     <input type='hidden' name='idx' value='{idx}'>
+    <input type='hidden' name='leak_terms' id='leak-terms-input' value=''>
     <p>
       <label>Decline reason
         <select name='decision' required>
           <option value=''>—</option>
-          <option value='request_reredaction'{(" selected" if existing_verdict == "request_reredaction" else "")}>Request re-redaction (something's wrong)</option>
+          <option value='request_reredaction'{(" selected" if existing_verdict == "request_reredaction" else "")}>Request re-redaction (terms below should be redacted)</option>
           <option value='mark_false_positive'{(" selected" if existing_verdict == "mark_false_positive" else "")}>Mark false positive (redacted something that shouldn't be)</option>
-          <option value='mark_missed_redaction'{(" selected" if existing_verdict == "mark_missed_redaction" else "")}>Mark missed redaction (didn't redact something it should have)</option>
+          <option value='mark_missed_redaction'{(" selected" if existing_verdict == "mark_missed_redaction" else "")}>Mark missed redaction (didn't redact terms below)</option>
           <option value='escalate'{(" selected" if existing_verdict == "escalate" else "")}>Escalate to DPO</option>
         </select>
       </label>
       &nbsp;
       {_reason_code_select_html()}
     </p>
-    <p><label>Feedback (required)<br><textarea name='note' rows='3' cols='80' required>{html.escape(existing_note)}</textarea></label></p>
+    <p><label>Free-text note (optional — leak terms above are auto-included)<br><textarea name='note' rows='2' cols='80'>{html.escape(existing_note)}</textarea></label></p>
     <p><button class='decline-btn' type='submit'>Submit decline &rarr;</button></p>
   </form>
 </div>
 {(f"<p class='meta'>existing decision: <b>{html.escape(existing_verdict)}</b> ({html.escape(existing_code)}) &mdash; {html.escape(existing_note[:120])}</p>" if existing_verdict else "")}
+<script>
+(function () {{
+  var pane = document.getElementById('pane-redacted');
+  var listEl = document.getElementById('leak-list');
+  var input = document.getElementById('leak-terms-input');
+  var declineForm = document.getElementById('decline-form');
+  var collected = [];  // preserve order, allow duplicates of distinct words
+  function render() {{
+    // Build the list via safe DOM construction (no innerHTML on untrusted
+    // text — chip content is whatever the operator double-clicked in the
+    // redacted pane, which can contain arbitrary characters). Using
+    // createElement + textContent makes it impossible for a stray '<' in
+    // the redacted text to escape into HTML when echoed back as a chip.
+    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+    if (collected.length === 0) {{
+      var empty = document.createElement('span');
+      empty.className = 'empty';
+      empty.textContent = 'none yet — double-click a leaked word in the right pane to add';
+      listEl.appendChild(empty);
+    }} else {{
+      collected.forEach(function (w, i) {{
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.setAttribute('data-i', String(i));
+        chip.setAttribute('title', 'click to remove');
+        chip.textContent = w;
+        listEl.appendChild(chip);
+      }});
+    }}
+    input.value = JSON.stringify(collected);
+  }}
+  function add(word) {{
+    if (!word) return;
+    word = word.trim();
+    if (!word) return;
+    collected.push(word);
+    render();
+  }}
+  // Double-click in the redacted pane: capture the selection (default
+  // double-click behaviour selects one word; a manual range selects a
+  // phrase). Whole selection becomes one chip.
+  pane.addEventListener('dblclick', function () {{
+    var sel = window.getSelection();
+    if (sel && sel.toString().trim().length > 0) {{
+      add(sel.toString());
+      sel.removeAllRanges();
+      // Once the operator has collected a leak term they almost certainly
+      // want to decline — open the form.
+      if (collected.length > 0) {{ declineForm.classList.add('open'); }}
+    }}
+  }});
+  // Click on a chip removes it.
+  listEl.addEventListener('click', function (ev) {{
+    var t = ev.target;
+    if (t && t.classList.contains('chip')) {{
+      var i = parseInt(t.getAttribute('data-i'), 10);
+      if (!isNaN(i)) {{ collected.splice(i, 1); render(); }}
+    }}
+  }});
+}})();
+</script>
 {_footer(ctx)}
 </body></html>"""
 
@@ -3022,6 +3109,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             decision = form.get("decision", "")
             reason_code = form.get("reason_code", "")
             note = form.get("note", "")
+            leak_terms_raw = form.get("leak_terms", "")
+            leak_terms: list[str] = []
+            if leak_terms_raw:
+                try:
+                    parsed = json.loads(leak_terms_raw)
+                    if isinstance(parsed, list):
+                        leak_terms = [str(t) for t in parsed if isinstance(t, (str, int, float))]
+                except (json.JSONDecodeError, TypeError):
+                    leak_terms = []
+            # Structured prefix so downstream tooling can parse leak_terms
+            # back out of the note field (record_qa_decision's signature
+            # only takes a free-text note; we embed JSON in a fenced prefix).
+            if leak_terms:
+                terms_block = "LEAK_TERMS=" + json.dumps(leak_terms, ensure_ascii=False)
+                note = f"{terms_block}\n{note}" if note else terms_block
             try:
                 idx = int(form.get("idx", "0"))
             except ValueError:
