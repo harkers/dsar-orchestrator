@@ -6,6 +6,27 @@ Versioning: see [`VERSIONING.md`](VERSIONING.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-27
+
+### Added — Live metric refresh on decision change (#117, v3-console Phase 2)
+
+New `local_broker/metrics.py` module is the single source of truth for the document-flow funnel. The operator console funnel now reflects current operator decisions without manual re-run.
+
+Two recompute entry points:
+
+- `recompute_funnel(case_dir)` — cheap (<100ms). Re-reads `ingested_items.jsonl`, `durant_verdicts.jsonl`, `redaction_decisions.jsonl`, `leak_review_decisions.jsonl`, `qa_decisions.jsonl` and emits the six headline counts: `ingested`, `in_scope`, `redacted`, `leak_excluded`, `qa_decided`, `final`. Called from each `*_decide` POST route after the chain emit + JSONL append.
+- `recompute_corpus_scale(case_dir)` — heavier (word/document counts from working `*.txt`). Called lazily from `/pipeline` render, not from per-decision routes.
+
+Both persist into `audit/corpus_metrics.json` with separate `funnel` and `scale` sub-trees so the two recomputes update independently and one never clobbers the other.
+
+Wired into four decision routes via `_safe_recompute_funnel(ctx.case_dir)` wrapper that swallows exceptions and logs them — a metrics IO failure must never block an operator decision whose chain event has already landed.
+
+New landing-page card: "Live funnel" with six stat tiles (ingested / in scope / redacted / leak-excluded / QA decided / final disclosure). Recomputed on every landing render.
+
+Sets up #118 (closure-letter auto-regeneration) which will source funnel numbers from `metrics.recompute_funnel` instead of `closure_letter.compute_funnel`'s bespoke pass.
+
+Tests: 20 new in `tests/test_metrics.py`. Full suite 609 passing.
+
 ## [0.11.0] - 2026-05-27
 
 ### Added — Ambiguous-flag review screen (#115, v3-console Phase 2)

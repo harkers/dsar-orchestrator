@@ -964,6 +964,45 @@ def _action_queue_html(ctx: CaseContext, state: dict) -> str:
     )
 
 
+def _safe_recompute_funnel(case_dir: Path) -> dict | None:
+    """Recompute the live funnel without ever raising. A metrics IO
+    issue (disk full, perm denied) must not fail a decision route — the
+    operator decision and its chain event already landed."""
+    try:
+        from dsar_orchestrator.local_broker.metrics import recompute_funnel
+
+        return recompute_funnel(case_dir)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("metrics: recompute_funnel raised %s: %s", type(exc).__name__, exc)
+        return None
+
+
+def _live_funnel_widget(ctx: CaseContext) -> str:
+    """Live document-flow funnel card. Always reflects current operator
+    decision state because every decision route refreshes the snapshot
+    after its chain emit."""
+    funnel = _safe_recompute_funnel(ctx.case_dir) or {
+        "ingested": 0,
+        "in_scope": 0,
+        "redacted": 0,
+        "leak_excluded": 0,
+        "qa_decided": 0,
+        "final": 0,
+    }
+    return f"""<div class='card'>
+<h2>Live funnel</h2>
+<p class='meta'>Reflects current operator decisions — recomputed on each decision route.</p>
+<div class='summary-grid'>
+<div class='stat'><span class='n'>{funnel["ingested"]:,}</span><span class='label'>Ingested</span></div>
+<div class='stat'><span class='n'>{funnel["in_scope"]:,}</span><span class='label'>In scope (Durant biographical)</span></div>
+<div class='stat'><span class='n'>{funnel["redacted"]:,}</span><span class='label'>Redacted</span></div>
+<div class='stat'><span class='n'>{funnel["leak_excluded"]:,}</span><span class='label'>Leak-excluded</span></div>
+<div class='stat'><span class='n'>{funnel["qa_decided"]:,}</span><span class='label'>QA decided</span></div>
+<div class='stat'><span class='n'>{funnel["final"]:,}</span><span class='label'>Final disclosure</span></div>
+</div>
+</div>"""
+
+
 def render_landing(ctx: CaseContext, state: dict, action_result: dict | None) -> str:
     meta = load_case_metadata(ctx)
     nums = pipeline_summary_numbers(ctx)
@@ -975,6 +1014,8 @@ def render_landing(ctx: CaseContext, state: dict, action_result: dict | None) ->
 {_action_result_html(action_result)}
 {_decision_hero(state, ctx, nums)}
 {_action_queue_html(ctx, state)}
+
+{_live_funnel_widget(ctx)}
 
 <div class='card'>
 <h2>Pipeline summary</h2>
@@ -2501,6 +2542,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "stderr": "",
                     "command": f"unextractable.record_decision({decision!r})",
                 }
+                _safe_recompute_funnel(ctx.case_dir)
             except Exception as exc:
                 _LAST_ACTION_RESULT = {
                     "rc": 2,
@@ -2554,6 +2596,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "stderr": "",
                     "command": f"qa_sample.record_qa_decision({decision!r})",
                 }
+                _safe_recompute_funnel(ctx.case_dir)
             except Exception as exc:
                 _LAST_ACTION_RESULT = {
                     "rc": 2,
@@ -2582,6 +2625,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "stderr": "",
                     "command": f"leak_review.record_decision({decision!r})",
                 }
+                _safe_recompute_funnel(ctx.case_dir)
             except Exception as exc:
                 _LAST_ACTION_RESULT = {
                     "rc": 2,
@@ -2619,6 +2663,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "stderr": "",
                     "command": f"flag_review.decide_cluster({verdict!r})",
                 }
+                _safe_recompute_funnel(ctx.case_dir)
             except Exception as exc:
                 _LAST_ACTION_RESULT = {
                     "rc": 2,
