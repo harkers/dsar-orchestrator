@@ -13,12 +13,21 @@ Per spec §1.5:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 DEFAULT_TOP_N = 50
 DEFAULT_REFERENT_THRESHOLD = 0.7
+
+
+def cluster_id(cluster: dict) -> str:
+    """Stable 16-char hex ID derived from canonical_name (sha1[:16]).
+    Used to round-trip cluster identity through HTML forms without
+    modifying people_register.json on the GET path (Option A)."""
+    name = str(cluster.get("canonical_name") or "")
+    return hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def load_people_register(case_dir: Path) -> list[dict[str, Any]]:
