@@ -75,7 +75,9 @@ class SourceStrategy(Protocol):
         """Per-strategy fail-loud conditions."""
 ```
 
-Strategies registered via setuptools `entry_points` group `dsar_pipeline.source_strategies`. Registry runs `detect()` on all; highest confidence wins, then priority, then alphabetical name (deterministic — no operator tie-break in unattended pipelines).
+Strategies registered via setuptools `entry_points` group `dsar_pipeline.source_strategies`. Registry runs `detect()` on all; **filters out zero-confidence candidates first** (a strategy returning 0.0 cannot be the answer), then ranks the survivors: highest confidence wins, then priority, then alphabetical name (deterministic — no operator tie-break in unattended pipelines).
+
+If ALL strategies return 0.0 confidence, the registry falls back to the lowest-priority strategy that opts-in via `is_universal_fallback: bool = False`. Exactly one strategy may set `is_universal_fallback = True` (default = `raw_dump`); this is the catch-all when no positive-confidence strategy fits.
 
 Built-in strategies (toolkit ships):
 - `exchange_nested` (priority 110) — when `mailbox_owner_email` is populated on register entries
@@ -111,7 +113,7 @@ Existing `dsar_pipeline.people_register` module, extended to consume the per-doc
   - `mention_count`, `distinct_doc_count`
   - `is_subject_confidence: float` (0-1)
   - `subject_centricity_score: float` (R2 delta — advisory; see §1.4)
-  - `text_quality_summary` (mode across source docs; see §1.6 for ordering)
+  - `text_quality_summary` (mode across source docs; see §1.9 for ordering)
   - `confidence_score` (lowest extraction confidence across constituent records)
 - Append `correlation_id = uuid5(uuid5(NAMESPACE_DSAR, case_id), f"{strategy_name}:{ref}")` per source-ref to avoid cross-strategy collision
 
@@ -128,7 +130,56 @@ cluster.subject_centricity_score = 0.6 * header_proximity_to_subject(cluster, re
 
 **Advisory only (R3 delta):** never auto-suppresses redaction. Always surfaces in the operator review console as `REVIEW PRIORITY: subject_referent_candidate` with explicit per-cluster rationale. Operator must explicitly approve preservation.
 
+**Helper-function definitions** (v1 baseline; refine in v2 calibration):
+- `header_proximity_to_subject(cluster, refs) -> float ∈ [0,1]`: fraction of cluster's source-refs where any cluster identifier appears in the same RFC822 header line, or adjacent ≤ 2 lines, to a subject identifier. 0 if no co-occurrence.
+- `pronoun_co_resolution_with_subject(cluster, refs) -> float ∈ [0,1]`: fraction of cluster mentions where a possessive pronoun (`my`, `our`, `their`) referring back to the subject sentence-precedes the cluster reference. Uses spaCy's `en_core_web_sm` coref-light heuristic (NOT neuralcoref — kept simple for v1).
+
 **[POLISH]** Weights `0.6/0.4` and threshold `0.7` are uncalibrated v1 defaults. A calibration corpus (10-50 labelled clusters across 2-3 engagements) lands in v2 to set defensible numbers. Until then, the score is documented as "advisory pending calibration corpus" in the operator console help panel.
+
+### 1.4a `sig_block_discovery_stage` (regex post-pass for NER misses)
+
+Runs after `build_people_register`, before the operator review console. Purpose: catch signature-block content the structured RFC822 + sig-region extractor missed because of malformed messages, encoded HTML, or non-standard signatures.
+
+**Inputs:**
+- `working/people_register.json` (existing clusters from §1.3)
+- All ingested doc text under `working/<ref>.txt`
+
+**Regex patterns:**
+
+```python
+# Toolkit-baseline patterns (live in dsar_pipeline.redaction_patterns)
+SIGBLOCK_PHONE_LABEL = re.compile(
+    r"\b(?:Office|Direct|Tel|Mobile|Phone)\s*:\s*\+?[\d\s()\-]{7,}",
+    re.IGNORECASE
+)
+
+# ALL-CAPS title detection; allowlist filters out subject + controller + boilerplate
+TITLE_CAPS = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,}){1,4}\b")
+
+TITLE_CAPS_ALLOWLIST = frozenset({
+    # subject identifiers (case must inject from data_subject.json)
+    # controller identifiers (case must inject from case_context.json)
+    # contract boilerplate
+    "THIS AMENDMENT", "THIS AGREEMENT", "WITNESS WHEREOF",
+    "STATEMENT OF WORK", "STATEMENT WORK", "MASTER SERVICES AGREEMENT",
+    # DocuSign / common system phrases
+    "VIEW COMPLETED DOCUMENT", "CLOSED WON OPPORTUNITY REQUEST",
+    # Statute / framework
+    "DSAR", "GDPR", "DPA", "EWCA", "UK", "EU", "ICH", "GCP",
+})
+```
+
+**Merge logic:**
+
+1. Scan each doc text. For each match (`TITLE_CAPS` filtered through allowlist, plus `SIGBLOCK_PHONE_LABEL`):
+   - Try to associate with an existing cluster (proximity to a known person in the doc)
+   - If no association: create a `candidate` cluster with `confidence_score = 0.5` (regex-only, no header-anchored), `is_subject_confidence = 0.0`
+2. Candidates merge into `working/people_register.json` flagged with `discovered_by: "sig_block_discovery"`
+3. Operator review surfaces these as "regex-discovered candidate; lower confidence than RFC822-anchored entries"
+
+**Output:** updated `working/people_register.json` with `discovered_by` field per cluster.
+
+**Audit event:** `SIG_BLOCK_DISCOVERY_COMPLETED` with counts (`candidates_found`, `merged_with_existing`, `new_clusters_added`).
 
 ### 1.5 Operator review console: `/people-register`
 
@@ -521,7 +572,26 @@ JSON Schema for `working/people_register.json` — list of cluster entries:
     "prompt_canonical_seal_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "prompt_effective_seal_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "schema_version": {"const": "ThirdPartyPiiCheck.v1"},
-    "verdict": {"type": "object"},
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["has_third_party_pii", "pii_categories", "example_tokens",
+                   "severity", "confidence", "rationale"],
+      "properties": {
+        "has_third_party_pii": {"type": "boolean"},
+        "pii_categories": {
+          "type": "array",
+          "items": {
+            "enum": ["full_name","email","phone","address","postcode",
+                     "id_number","ipv4","date_of_birth","other"]
+          }
+        },
+        "example_tokens": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "severity": {"enum": ["none","low","medium","high"]},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "rationale": {"type": "string", "maxLength": 600}
+      }
+    },
     "correlation_id": {"type": "string", "format": "uuid"},
     "broker_endpoint": {"type": "string"},
     "infer_latency_ms": {"type": "integer"},
@@ -641,6 +711,8 @@ If missing → verdict line flips to: `✗ BLOCKED — run dsar-build-people-reg
 | Non-English signatures bleed into review | `langdetect` → fallback parser; confidence <0.5 surfaces to operator |
 | Embedding endpoint misconfigured as public → subject vectors leak | Threat model mandatory; `mlx-broker` local-only on 127.0.0.1; subject vectors never leave case dir |
 | Cache tampering bypasses subject-protection check | HMAC-signed cache entries; per-case secret; atomic write |
+| `mlx-broker` unavailable during `pii_jury_review_stage` | Stage halts with `MlxBrokerUnreachableError`; conductor refuses to advance to `final_synth`; operator must restart broker. NO auto-fallback to a different model (would invalidate Article 30 ROPA reproducibility). |
+| Operator misconfigures `mlx-broker` to bind 0.0.0.0 → potential exfil | Threat model `Embed endpoint` section explicitly requires 127.0.0.1 binding. Conductor pre-flight verifies broker reachable on loopback only (not via the public interface) before invoking jury. |
 
 ## 7. Open / [POLISH] items (tracked for implementation phase + v2)
 
