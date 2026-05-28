@@ -29,6 +29,8 @@ from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
 from dsar_orchestrator.config import CaseConfig, load_case_config, validate_phase_4_prereqs
 from dsar_orchestrator.exceptions import (
     DSARPipelineError,
+    PeopleRegisterBuildError,
+    PeopleRegisterEmptyError,
     PipelineHalt,
 )
 
@@ -647,6 +649,188 @@ def _run_fitness_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
         )
 
 
+def _corpus_has_communicants(case_path: Path) -> bool:
+    """Spec §2.1 helper: does the corpus have communicants?
+
+    A 'communicant' is signalled by ANY of:
+      - register.json entry with non-null mailbox_owner_email
+      - register.json entry with a non-empty source_kind
+      - register.json entry filename ending .eml / .msg
+      - any .eml / .msg file present under working/ or redacted/
+        (catches the case where ingest itself silently failed to record
+        the ref — exactly the case-301770 silent-empty class)
+
+    Phase 6 v1 heuristic; used to distinguish 'empty register because
+    corpus is genuinely empty' from 'empty register because Phase 1
+    build silently failed'."""
+    working = case_path / "working"
+    register_path = working / "register.json"
+    if register_path.exists():
+        try:
+            refs = json.loads(register_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            refs = None
+        if isinstance(refs, list):
+            for r in refs:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("mailbox_owner_email"):
+                    return True
+                sk = r.get("source_kind")
+                if isinstance(sk, str) and sk.strip():
+                    return True
+                fn = r.get("filename") or ""
+                if isinstance(fn, str) and fn.lower().endswith((".eml", ".msg")):
+                    return True
+    # Directory scan fallback — catches ingest-side failures where the
+    # register didn't get written / is missing entries.
+    for d in (working, case_path / "redacted"):
+        if d.exists():
+            for p in d.iterdir():
+                if p.is_file() and p.name.lower().endswith((".eml", ".msg")):
+                    return True
+    return False
+
+
+def _emit_people_register_skip_event(case_path: Path, reason: str) -> None:
+    """Write a PEOPLE_REGISTER_GATE_BYPASSED audit event with the operator's
+    skip reason."""
+    try:
+        from dsar_pipeline.audit import AuditEventType, FileAuditStore
+
+        event_type = getattr(AuditEventType, "PEOPLE_REGISTER_GATE_BYPASSED", None)
+        if event_type is None:
+            event_type = AuditEventType.PEOPLE_REGISTER_BUILT  # closest existing
+        store = FileAuditStore(working_dir=case_path / "working")
+        store.append_event(
+            event_type=event_type,
+            payload={
+                "reason": reason,
+                "bypass_kind": "force_skip_people_register_reason",
+            },
+            case_id=case_path.name,
+            agent="orchestrator",
+            stage="people_register_preflight",
+        )
+    except Exception as exc:
+        import sys
+
+        print(
+            f"[people_register_preflight] audit emit failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+def _run_people_register_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.1. Pre-flight gate before redact stage.
+
+    No-op when cfg.people_register_enabled is False. Halts with
+    PeopleRegisterBuildError if build_people_register doesn't produce
+    a register file. Halts with PeopleRegisterEmptyError if the
+    produced register has zero third-party clusters on a corpus that
+    HAS communicants (people_register_enabled but build silently empty
+    = case 301770 silent-empty bug, which the whole project addresses).
+
+    Force-skip via cfg.force_skip_people_register_reason records an
+    audit event + proceeds.
+    """
+    if not cfg.people_register_enabled:
+        auditor.note(
+            "people_register_preflight",
+            "people_register_enabled=False; preflight skipped by config",
+        )
+        return
+
+    with StageBanner(auditor, "people_register_preflight"):
+        register_path = cfg.case_path / "working" / "people_register.json"
+
+        # Force-skip path
+        skip_reason = (cfg.force_skip_people_register_reason or "").strip()
+        if skip_reason:
+            _emit_people_register_skip_event(cfg.case_path, skip_reason)
+            auditor.note(
+                "people_register_preflight",
+                f"force_skip_people_register: {skip_reason!r}",
+            )
+            return
+
+        # Auto-build if missing
+        if not register_path.exists():
+            try:
+                from dsar_pipeline.build_people_register import build_people_register
+            except ImportError as exc:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: dsar_pipeline.build_people_register unavailable: {exc!r}"
+                ) from exc
+            try:
+                build_people_register(cfg.case_path)
+            except Exception as exc:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: build_people_register raised: {exc!r}"
+                ) from exc
+            if not register_path.exists():
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: build_people_register did not "
+                    f"produce {register_path}. Source-strategy detection: "
+                    f"check ingest output."
+                )
+
+        # Parse the register — malformed JSON is a build artifact failure
+        # the operator must fix before redact can proceed (deferring to a
+        # generic JSONDecodeError trace would crash the pipeline without
+        # the structured PeopleRegisterBuildError the conductor expects).
+        try:
+            register_raw_bytes = register_path.read_bytes()
+            register = json.loads(register_raw_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PeopleRegisterBuildError(
+                f"case={cfg.case_no}: people_register.json unreadable / "
+                f"malformed: {exc!r}. Re-run dsar-build-people-register "
+                f"or hand-fix the file."
+            ) from exc
+
+        # Sufficiency check
+        register = json.loads(register_path.read_text(encoding="utf-8"))
+        third_party_clusters = [c for c in register if not c.get("is_data_subject")]
+
+        if not third_party_clusters and _corpus_has_communicants(cfg.case_path):
+            raise PeopleRegisterEmptyError(
+                f"case={cfg.case_no}: people_register has zero third-party "
+                f"clusters but corpus contains communicants. Likely source-"
+                f"strategy misdetection or extraction failure. Run "
+                f"`dsar-build-people-register --case {cfg.case_no}` manually "
+                f"and inspect the source_strategy detection output."
+            )
+
+        # Strategy-specific validation. Narrow except to ImportError +
+        # AttributeError ONLY — those are infrastructure-availability
+        # conditions (older toolkit install missing source_strategies
+        # module or the default_registry symbol). Any OTHER exception
+        # (strategy.validate raising on a real validation failure, or a
+        # network error from a future remote strategy) MUST propagate so
+        # the gate enforces what spec §2.1 says it enforces.
+        try:
+            from dsar_pipeline.source_strategies import default_registry
+        except (ImportError, AttributeError) as exc:
+            auditor.note(
+                "people_register_preflight",
+                f"source_strategies unavailable; skipping strategy validation: {exc!r}",
+            )
+        else:
+            strategy = default_registry().select_strategy(cfg.case_path)
+            validation = strategy.validate(register)
+            if not validation.valid:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: strategy={strategy.name} validation "
+                    f"failed: {validation.errors}"
+                )
+
+        auditor.note(
+            "people_register_preflight",
+            f"OK: {len(third_party_clusters)} third-party clusters",
+        )
+
+
 # ─────────────────────────────────────────────────────────────────
 # The orchestrator entry point
 # ─────────────────────────────────────────────────────────────────
@@ -723,6 +907,12 @@ def run(
         # stage runs if the model is not certified fit. Skipped when
         # cfg.fitness_check_enabled is False.
         _run_fitness_preflight(cfg, audit)
+
+        # Phase 6 (spec §2.1): people-register pre-flight. Halts BEFORE
+        # any stage runs if the register is missing or empty on a corpus
+        # that has communicants. Skipped when
+        # cfg.people_register_enabled is False.
+        _run_people_register_preflight(cfg, audit)
 
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):

@@ -24,3 +24,12 @@ class UpstreamHashMismatch(DSARPipelineError):
     """An artefact's recorded upstream_hash doesn't match the current
     upstream state. Message includes the artefact path + the re-run
     instruction that would resolve it."""
+
+
+class PeopleRegisterBuildError(PipelineHalt):
+    """Spec §2.1: build_people_register didn't produce a usable register."""
+
+
+class PeopleRegisterEmptyError(PipelineHalt):
+    """Spec §2.1: register has zero third-party clusters on a non-empty
+    communicant corpus — the case-301770 silent-empty class of bug."""
