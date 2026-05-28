@@ -3,11 +3,15 @@
 How to run a DSAR case through the orchestrator on `zen`, recover from
 failures, and use the analyser to push back on suspect runs.
 
+For a step-by-step operator loop from ingestion through final export, see [docs/runbooks/dsar-operator-loop.md](docs/runbooks/dsar-operator-loop.md). For the autonomous, agent-driven equivalent (Claude Code looping the pipeline via the Ralph Loop plugin), see [docs/runbooks/ralph-dsar-prompt.md](docs/runbooks/ralph-dsar-prompt.md).
+
+If ingestion fails, the runbook also has a dedicated ingest QA section that explains what failed, what to retry, and which artifacts to inspect.
+
 ## The two operator commands
 
 | Command | What it does |
 |---|---|
-| `dsar-conductor --case <no>` | Run (or resume) the full 9-stage pipeline for a case |
+| `dsar-conductor --case <no>` | Run (or resume) the full 10-stage pipeline for a case |
 | `dsar-analyse-logs --case <no>` | Ask the local LLM (via mlx-broker) to review the case's audit logs and surface issues |
 
 Both are read-only by default with the right flags (`--check`,
