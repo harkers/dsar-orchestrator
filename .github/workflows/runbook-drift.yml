@@ -1,0 +1,41 @@
+# Runbook drift check.
+# Spec: docs/runbooks/dsar-operator-loop.md is the human walkthrough of the
+# orchestrator's stage ladder. This job fails the build if STAGE_ORDER or
+# its sub-stages diverge from what the runbook + operator-guide claim.
+name: runbook-drift
+
+on:
+  pull_request:
+    paths:
+      - "src/dsar_orchestrator/pipeline.py"
+      - "src/dsar_orchestrator/cli.py"
+      - "src/dsar_orchestrator/stages.py"
+      - "docs/runbooks/**"
+      - "docs/operator-guide.md"
+      - "tools/check_runbook_drift.py"
+      - ".github/workflows/runbook-drift.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/dsar_orchestrator/pipeline.py"
+      - "src/dsar_orchestrator/cli.py"
+      - "src/dsar_orchestrator/stages.py"
+      - "docs/runbooks/**"
+      - "docs/operator-guide.md"
+      - "tools/check_runbook_drift.py"
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run runbook drift check
+        run: python tools/check_runbook_drift.py
