@@ -51,3 +51,10 @@ class ThreatModelMissingError(PipelineHalt):
 class ThreatModelIncompleteError(PipelineHalt):
     """Spec §2.5: threat_model.md missing required section(s) or has
     sections under the minimum content length."""
+
+
+class SubjectInDenylistPipelineError(PipelineHalt):
+    """Spec §1.6: validate_denylist_against_subject detected a fuzzy
+    match between a denylist entry and a subject identifier (embed.cosine
+    threshold 0.85). Operator must fix the denylist or data_subject.json
+    via the /people-register console before redact can proceed."""

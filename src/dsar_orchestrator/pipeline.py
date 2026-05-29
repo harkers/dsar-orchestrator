@@ -36,6 +36,7 @@ from dsar_orchestrator.exceptions import (
     PeopleRegisterBuildError,
     PeopleRegisterEmptyError,
     PipelineHalt,
+    SubjectInDenylistPipelineError,
     ThreatModelIncompleteError,
     ThreatModelMissingError,
 )
@@ -727,6 +728,79 @@ def _emit_people_register_skip_event(case_path: Path, reason: str) -> None:
         )
 
 
+def _run_subject_protection_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §1.6. Cross-check the operator-curated third_party_denylist
+    against data_subject.json via embed.cosine fuzzy match.
+
+    Graceful degradations:
+      - No working/third_party_denylist.json yet (operator hasn't
+        reviewed) -> skip silently. The redact stage's in-stage
+        _filter_subject_identifiers is the v1 defense-in-depth fallback.
+      - TEI embed server unreachable -> SOFT WARNING + audit note,
+        proceed. The in-stage filter still applies; NO auto-fallback
+        to a different model (would invalidate ROPA reproducibility).
+      - validate_denylist_against_subject raises SubjectInDenylistError
+        -> hard halt via SubjectInDenylistPipelineError. Operator must
+        fix the denylist or data_subject.json.
+    """
+    with StageBanner(auditor, "subject_protection_preflight"):
+        denylist_path = cfg.case_path / "working" / "third_party_denylist.json"
+        if not denylist_path.exists():
+            auditor.note(
+                "subject_protection_preflight",
+                "no third_party_denylist.json yet; preflight skipped "
+                "(operator must run /people-register console first)",
+            )
+            return
+
+        try:
+            from dsar_pipeline.gates.subject_protection import (
+                SubjectInDenylistError,
+                validate_denylist_against_subject,
+            )
+            from dsar_pipeline.tei_embed_model_adapter import (
+                EmbedModelUnavailableError,
+                TeiEmbedModelAdapter,
+            )
+        except (ImportError, AttributeError) as exc:
+            auditor.note(
+                "subject_protection_preflight",
+                f"toolkit infrastructure unavailable: {exc!r}; skipping",
+            )
+            return
+
+        # Adapter construction and the cross-check call are both inside
+        # the EmbedModelUnavailableError catch — construction itself may
+        # probe TEI for the manifest signature, and either path's
+        # connection failure must surface as a soft warning, not a crash
+        # (DeepSeek convergent jury finding).
+        try:
+            adapter = TeiEmbedModelAdapter()
+            validate_denylist_against_subject(cfg.case_path, adapter)
+        except EmbedModelUnavailableError as exc:
+            # Soft warning: TEI server isn't up. Don't auto-fallback;
+            # operator should investigate. The in-stage filter in
+            # RedactStage (_filter_subject_identifiers) provides v1
+            # defense-in-depth fallback.
+            auditor.note(
+                "subject_protection_preflight",
+                f"WARN: TEI embed unavailable ({exc!r}); cross-check "
+                f"skipped. RedactStage in-stage filter still applies.",
+            )
+            return
+        except SubjectInDenylistError as exc:
+            raise SubjectInDenylistPipelineError(
+                f"case={cfg.case_no}: subject-protection cross-check "
+                f"failed: {exc}. Fix the denylist or data_subject.json "
+                f"via /people-register console before re-running."
+            ) from exc
+
+        auditor.note(
+            "subject_protection_preflight",
+            "OK: no denylist entry fuzzy-matches a subject identifier",
+        )
+
+
 def _run_people_register_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
     """Spec §2.1. Pre-flight gate before redact stage.
 
@@ -1124,6 +1198,9 @@ def run(
 
         # Phase 6 (spec §2.5 R4/R5): threat-model content verifier.
         _verify_threat_model(cfg, audit)
+
+        # Spec §1.6: subject-protection cross-check (people-register hardening).
+        _run_subject_protection_preflight(cfg, audit)
 
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):
