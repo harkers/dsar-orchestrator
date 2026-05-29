@@ -3,15 +3,17 @@
 How to run a DSAR case through the orchestrator on `zen`, recover from
 failures, and use the analyser to push back on suspect runs.
 
-## The two operator commands
+## The operator commands
 
 | Command | What it does |
 |---|---|
 | `dsar-conductor --case <no>` | Run (or resume) the full 9-stage pipeline for a case |
 | `dsar-analyse-logs --case <no>` | Ask the local LLM (via mlx-broker) to review the case's audit logs and surface issues |
+| `dsar-operator-console --case-dir <path>` | Localhost decision console + live-log feed for a case (see "Watching a run live") |
 
-Both are read-only by default with the right flags (`--check`,
-`--no-write`). Both stay on the box — no external API calls.
+The first two are read-only by default with the right flags (`--check`,
+`--no-write`); the console is read-mostly (its only writes are explicit
+operator decisions). All stay on the box — no external API calls.
 
 ## Day-to-day flow
 
@@ -103,6 +105,43 @@ dsar-conductor --case 300100 --through scope_classify
 # Re-do everything from redact onward (e.g., after fixing redact.py)
 dsar-conductor --case 300100 --from redact
 ```
+
+## Watching a run live (operator console)
+
+The console serves a localhost-only, single-case UI. Point it at a case
+working directory and open it in a browser on the box:
+
+```bash
+dsar-operator-console --case-dir ~/dsars/cases/300100 --port 8089
+# → http://127.0.0.1:8089/   (decision pages)
+# → http://127.0.0.1:8089/live-log   (live-event feed)
+```
+
+It binds `127.0.0.1` only and is scoped to the one `--case-dir`. Two uses:
+
+- **Decision pages** — blockers, unextractable, leak review, flag review,
+  QA walkthrough, people register, release readiness. These are where the
+  operator clears gates and records decisions during a run.
+- **Live-log feed** (`/live-log`) — a Plex-style tail of the run as it
+  happens, so you don't have to `tail -f` three jsonls by hand. It merges:
+  - `working/audit_events.jsonl` (L1 — high-level events),
+  - the per-stage decision/finding jsonls behind a **verbose** toggle (L2),
+  - `~/.dsar-audit/<case_no>/pipeline.jsonl` (L3 — the same stage
+    banners/durations the conductor prints).
+
+  Filter by source, severity, or substring; pause to inspect; the gap
+  badge counts any rotation/truncation gaps. The browser auto-reconnects
+  and resumes from where it left off (composite `Last-Event-ID` cursor),
+  with a 30 s replay window on first connect.
+
+**PII boundary.** The live feed never ships raw payloads. Every event is
+projected through a fail-closed per-event-type field allowlist before it
+reaches the browser; anything not explicitly allowlisted is dropped. In
+particular the free-text `note().message` written to `pipeline.jsonl` is
+**not** surfaced — operators who need a full note read the file directly
+(e.g. via the console's `/file` route, which applies its own redaction).
+This makes `/live-log` safe to leave open during a run without leaking
+subject or third-party data to the rendered page.
 
 ## When the analyser blocks you
 
@@ -204,7 +243,8 @@ cat ~/dsars/cases/300100/working/embeddings.jsonl | head -1 | jq .upstream_hash
 | `~/dsars/cases/<no>/redacted/` | Stage-3 redacted documents |
 | `~/dsars/cases/<no>/output/` | Final exported PDFs |
 | `~/dsars/cases/<no>/case_config.json` | Per-case config (mode, threshold, subject_identifier) |
-| `~/.dsar-audit/<no>/pipeline.jsonl` | Orchestrator audit log (stage transitions, durations, outcomes) |
+| `~/.dsar-audit/<no>/pipeline.jsonl` | Orchestrator audit log (stage transitions, durations, outcomes); L3 source for the console `/live-log` feed |
+| `~/dsars/cases/<no>/working/audit_events.jsonl` | High-level case events; L1 source for the console `/live-log` feed |
 | `~/.dsar-audit/<no>/module_checks.jsonl` | Per-module agent validation outcomes |
 | `~/.dsar-audit/<no>/analysis.jsonl` | Log analyser findings (one row per finding) |
 | `~/.dsar-audit/<no>/analysis.md` | Log analyser findings (human-readable) |

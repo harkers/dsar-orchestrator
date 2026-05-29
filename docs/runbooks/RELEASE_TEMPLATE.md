@@ -48,7 +48,8 @@ prepended to every release runbook from this engagement forward.
 
 3. **Operator review** at the `/people-register` console route
    ```bash
-   dsar-operator-console --case "$CASE_ID" --port 8089
+   dsar-operator-console --case-dir ~/dsars/cases/"$CASE_ID" --port 8089
+   # decision pages at http://127.0.0.1:8089/
    ```
    - Review top-50 ranked clusters (mention × distinct-doc × (1 -
      subject_confidence) per spec §1.5)
@@ -102,6 +103,20 @@ per-stage operator decisions, and the expected artefact paths.)
 ```bash
 dsar-conductor run --case "$CASE_ID"
 ```
+
+**Watch it live.** Keep the console open at the live-log feed while the
+run executes — it tails the L1/L2/L3 audit jsonls so you see stage
+transitions, durations, and decision events as they happen, instead of
+`tail -f`-ing files by hand:
+
+```bash
+dsar-operator-console --case-dir ~/dsars/cases/"$CASE_ID" --port 8089
+# → http://127.0.0.1:8089/live-log
+```
+
+The feed is PII-safe by construction (fail-closed projection allowlist;
+free-text `note().message` is dropped), so it is safe to leave open for
+the duration of the run.
 
 ---
 
