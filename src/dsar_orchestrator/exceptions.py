@@ -33,3 +33,12 @@ class PeopleRegisterBuildError(PipelineHalt):
 class PeopleRegisterEmptyError(PipelineHalt):
     """Spec §2.1: register has zero third-party clusters on a non-empty
     communicant corpus — the case-301770 silent-empty class of bug."""
+
+
+class EmptyIngestError(PipelineHalt):
+    """Spec §2.4: 0 refs ingested — nothing for the pipeline to redact."""
+
+
+class ExtractionQualityCatastrophicError(PipelineHalt):
+    """Spec §2.4: >50% of refs failed text extraction — operator must
+    triage upstream before redaction can produce a defensible pack."""

@@ -29,6 +29,8 @@ from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
 from dsar_orchestrator.config import CaseConfig, load_case_config, validate_phase_4_prereqs
 from dsar_orchestrator.exceptions import (
     DSARPipelineError,
+    EmptyIngestError,
+    ExtractionQualityCatastrophicError,
     PeopleRegisterBuildError,
     PeopleRegisterEmptyError,
     PipelineHalt,
@@ -832,6 +834,99 @@ def _run_people_register_preflight(cfg: CaseConfig, auditor: PipelineAuditor) ->
 
 
 # ─────────────────────────────────────────────────────────────────
+# Phase 6 Task 3: extraction-quality gate (spec §2.4 R4/R5)
+# ─────────────────────────────────────────────────────────────────
+
+
+def _load_refs_for_quality_check(case_path: Path) -> list[dict]:
+    """Read working/register.json; return [] on any error so the caller
+    raises EmptyIngestError with a clean message."""
+    p = case_path / "working" / "register.json"
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [r for r in data if isinstance(r, dict)]
+
+
+def _emit_extraction_quality_warning(case_path: Path, rate: float, refs_total: int) -> None:
+    """Write an EXTRACTION_QUALITY_GATE_WARNING audit event. Falls back
+    to a generic event type + stderr if the new enum value isn't
+    available on the installed toolkit (older deploys)."""
+    try:
+        from dsar_pipeline.audit import AuditEventType, FileAuditStore
+
+        event_type = getattr(AuditEventType, "EXTRACTION_QUALITY_GATE_WARNING", None)
+        if event_type is None:
+            event_type = AuditEventType.PEOPLE_REGISTER_BUILT  # closest existing
+        store = FileAuditStore(working_dir=case_path / "working")
+        store.append_event(
+            event_type=event_type,
+            payload={
+                "ocr_failure_rate": round(rate, 4),
+                "refs_total": refs_total,
+                "soft_gate_threshold": 0.10,
+                "hard_halt_threshold": 0.50,
+            },
+            case_id=case_path.name,
+            agent="orchestrator",
+            stage="extraction_quality_gate",
+        )
+    except (ImportError, AttributeError) as exc:
+        import sys
+
+        print(
+            f"[extraction_quality_gate] audit emit failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+def _check_extraction_quality(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.4 R4/R5. Soft + hard gate on extraction-quality posture.
+
+    - 0 refs   -> EmptyIngestError (hard halt; nothing to redact)
+    - >50% OCR -> ExtractionQualityCatastrophicError (hard halt; operator
+                  must triage extraction upstream)
+    - >10% OCR -> EXTRACTION_QUALITY_GATE_WARNING audit event (soft gate;
+                  operator can review and proceed with reduced set)
+    """
+    with StageBanner(auditor, "extraction_quality_gate"):
+        refs = _load_refs_for_quality_check(cfg.case_path)
+        if not refs:
+            raise EmptyIngestError(
+                f"case={cfg.case_no}: 0 refs ingested. Nothing to redact. "
+                f"Check ingest stage output."
+            )
+        ocr_failures = sum(1 for r in refs if (r.get("text_quality") or "unknown") == "ocr_failure")
+        rate = ocr_failures / len(refs)
+
+        if rate > 0.50:
+            raise ExtractionQualityCatastrophicError(
+                f"case={cfg.case_no}: ocr_failure rate {rate:.1%} > 50%. "
+                f"Halt pipeline; operator must triage extraction failures "
+                f"upstream before redaction can proceed."
+            )
+
+        if rate > 0.10:
+            _emit_extraction_quality_warning(cfg.case_path, rate, len(refs))
+            auditor.note(
+                "extraction_quality_gate",
+                f"WARN: ocr_failure rate {rate:.1%} > 10% "
+                f"(threshold for hard halt: 50%). Proceeding.",
+            )
+            return
+
+        auditor.note(
+            "extraction_quality_gate",
+            f"OK: {len(refs)} refs, ocr_failure {rate:.1%}",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
 # The orchestrator entry point
 # ─────────────────────────────────────────────────────────────────
 
@@ -913,6 +1008,10 @@ def run(
         # that has communicants. Skipped when
         # cfg.people_register_enabled is False.
         _run_people_register_preflight(cfg, audit)
+
+        # Phase 6 (spec §2.4 R4/R5): extraction-quality gate. Halts on
+        # 0 refs or >50% OCR failure; soft-warns on >10%.
+        _check_extraction_quality(cfg, audit)
 
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):
