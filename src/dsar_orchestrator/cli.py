@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument(
         "--check",
         required=True,
-        choices=("prompt-versions", "fitness-report"),
+        choices=("prompt-versions", "fitness-report", "people-register"),
         help="What to verify.",
     )
     p_verify.add_argument(
@@ -273,6 +273,13 @@ def _dispatch_verify(args: argparse.Namespace) -> int:
         result = verify_prompt_versions(case_path, strict=args.strict)
     elif args.check == "fitness-report":
         result = verify_fitness_report(case_path)
+    elif args.check == "people-register":
+        from dsar_orchestrator.verify import verify_people_register
+
+        outcome = verify_people_register(case_path)
+        mark = "✓" if outcome["ok"] else "✗"
+        print(f"{mark} {outcome['message']}")
+        return 0 if outcome["ok"] else 1
     else:
         print(f"unknown --check {args.check!r}", file=sys.stderr)
         return 2

@@ -787,7 +787,7 @@ def _case_header(ctx: CaseContext, meta: dict) -> str:
         "</div>"
         "<nav>"
         "<a href='/'>Home</a>"
-        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a><a href='/qa-walkthrough'>QA walkthrough</a>"
+        "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a><a href='/qa-walkthrough'>QA walkthrough</a><a href='/people-register'>People register</a>"
         "<a href='/release-check'>Release readiness</a>"
         "<a href='/pipeline'>Pipeline details</a>"
         "</nav></div>"
@@ -2639,6 +2639,94 @@ def render_flag_review(ctx: CaseContext, action_result: dict | None) -> str:
 </body></html>"""
 
 
+def render_people_register(ctx: "CaseContext", action_result: dict | None) -> str:
+    """Spec §1.5 operator review console — top-50 third-party clusters
+    ranked by mention × distinct-doc × (1 - subject_confidence), plus a
+    separate REVIEW PRIORITY section for subject_referent_candidate
+    clusters (subject_centricity_score > 0.7 advisory).
+
+    Per-cluster action buttons wire in Phase 3 Task 5 — this task is
+    the read-only render."""
+    from dsar_orchestrator.local_broker.people_register_console import (
+        cluster_id as _cluster_id,
+        load_people_register,
+        select_subject_referent_candidates,
+        select_top_n,
+    )
+
+    clusters = load_people_register(ctx.case_dir)
+    top_clusters = select_top_n(clusters)
+    referent_candidates = select_subject_referent_candidates(clusters)
+    total = len(clusters)
+    third_party_count = sum(1 for c in clusters if not c.get("is_data_subject"))
+    subject_count = sum(1 for c in clusters if c.get("is_data_subject"))
+
+    def _row(c: dict) -> str:
+        name = html.escape(str(c.get("canonical_name") or ""))
+        emails = html.escape(", ".join(c.get("emails") or []))
+        phones = html.escape(", ".join(c.get("phones") or []))
+        first_ref = html.escape((c.get("source_refs") or [""])[0])
+        mc = int(c.get("mention_count", 0))
+        dc = int(c.get("distinct_doc_count", 0))
+        tq = html.escape(str(c.get("text_quality_summary") or "unknown"))
+        conf = c.get("confidence_score")
+        conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "—"
+        cid_safe = html.escape(_cluster_id(c))
+        action_form = (
+            f"<form method='POST' action='/api/people-register/decide' style='display:inline'>"
+            f"<input type='hidden' name='cluster_id' value='{cid_safe}'>"
+            f"<input type='text' name='operator_id' placeholder='op-id' required size='8'>"
+            f"<input type='text' name='note' placeholder='note' size='12'>"
+            f"<button name='action' value='accept_as_third_party' type='submit'>Accept</button> "
+            f"<button name='action' value='preserve' type='submit'>Preserve</button> "
+            f"<button name='action' value='mark_subject_alias' type='submit'>Subject alias</button>"
+            f"</form>"
+        )
+        return (
+            f"<tr><td><b>{name}</b></td><td>{emails}</td><td>{phones}</td>"
+            f"<td><code>{first_ref}</code></td><td>{mc}</td><td>{dc}</td>"
+            f"<td>{tq}</td><td>{conf_s}</td><td>{action_form}</td></tr>"
+        )
+
+    _TABLE_HEADER = (
+        "<thead><tr><th>Name</th><th>Emails</th><th>Phones</th><th>First seen</th>"
+        "<th>Mentions</th><th>Docs</th><th>Text quality</th><th>Confidence</th>"
+        "<th>Actions</th></tr></thead>"
+    )
+
+    top_rows = "".join(_row(c) for c in top_clusters) or (
+        "<tr><td colspan='9' class='muted'>(no third-party clusters yet)</td></tr>"
+    )
+
+    referent_section = ""
+    if referent_candidates:
+        ref_rows = "".join(_row(c) for c in referent_candidates)
+        referent_section = f"""
+<h2>REVIEW PRIORITY: subject_referent_candidate</h2>
+<p class='meta'>Clusters with subject_centricity_score &gt; 0.7 (advisory). Spec §1.4 — these may be biographically focused on the subject. Operator must explicitly approve preservation; never auto-suppressed.</p>
+<table class='cluster-table'>
+  {_TABLE_HEADER}
+  <tbody>{ref_rows}</tbody>
+</table>"""
+
+    meta = load_case_metadata(ctx)
+    return f"""<!doctype html>
+<html><head><title>People register · {html.escape(ctx.case_id)}</title>{_BASE_CSS}</head>
+<body>
+{_case_header(ctx, meta)}
+<h1>People register</h1>
+<p class='meta'>{total} cluster{"s" if total != 1 else ""} total · {third_party_count} third-party · {subject_count} subject. Spec §1.5 — top-50 view, ranked by mention × distinct-doc × (1 − subject_confidence). Action buttons wire in Phase 3 Task 5.</p>
+{_action_result_html(action_result)}
+{referent_section}
+<h2>Top {len(top_clusters)} third-party clusters</h2>
+<table class='cluster-table'>
+  {_TABLE_HEADER}
+  <tbody>{top_rows}</tbody>
+</table>
+{_footer(ctx)}
+</body></html>"""
+
+
 def render_flag_review_cluster(
     ctx: CaseContext, *, text: str, classification: str, action_result: dict | None
 ) -> str:
@@ -2891,6 +2979,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if url.path == "/waiver/dpo":
             self._send(200, render_waiver_dpo(ctx, ar))
+            _LAST_ACTION_RESULT = None
+            return
+        if url.path == "/people-register":
+            self._send(200, render_people_register(ctx, ar))
             _LAST_ACTION_RESULT = None
             return
         self._send(404, "<h1>404</h1>")
@@ -3370,6 +3462,44 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "command": "(skipped)",
                 }
             target = "/pipeline"
+        elif url.path == "/api/people-register/decide":
+            from dsar_orchestrator.local_broker.people_register_decisions import (
+                DecisionError,
+                record_decision,
+            )
+
+            action = form.get("action", "")
+            try:
+                record_decision(
+                    case_dir=ctx.case_dir,
+                    cluster_id=form.get("cluster_id", ""),
+                    action=action,
+                    operator_id=form.get("operator_id", ""),
+                    controller=(load_case_metadata(ctx).get("controller") or ""),
+                    note=form.get("note", ""),
+                    merge_target_id=(form.get("merge_target_id") or None),
+                )
+                _LAST_ACTION_RESULT = {
+                    "rc": 0,
+                    "stdout": f"Decision recorded: {action}",
+                    "stderr": "",
+                    "command": f"people_register.record_decision({action!r})",
+                }
+            except DecisionError as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"DecisionError: {exc}",
+                    "command": f"people_register.record_decision({action!r})",
+                }
+            except Exception as exc:
+                _LAST_ACTION_RESULT = {
+                    "rc": 2,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "command": "people_register.record_decision",
+                }
+            target = "/people-register"
         else:
             self._send(404, "<h1>404</h1>")
             return

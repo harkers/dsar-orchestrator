@@ -23,9 +23,14 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, Optional
 
 VALID_RERANK_MODES = {"off", "shadow", "enforce"}
 VALID_PII_MODES = {"off", "shadow", "enforce"}
+
+# Phase 6 — people-register-hardening Literal sets
+_VALID_PII_JURY_SAMPLING: frozenset[str] = frozenset({"full", "tiered", "spot_check"})
+_VALID_PII_JURY_DISAGREEMENT: frozenset[str] = frozenset({"operator_review", "redact_safer"})
 
 
 @dataclass
@@ -117,6 +122,62 @@ class CaseConfig:
     fitness_check_canary_path: Path | None = None
     fitness_check_max_report_age_days: int = 30
     force_skip_fitness_reason: str = ""
+
+    # Phase 6 — people-register-hardening (spec §2.2)
+    #
+    # YAML schema (all keys optional; defaults preserve current behaviour):
+    #
+    #   {
+    #     ...,
+    #     "people_register_enabled": true,
+    #     "force_skip_people_register_reason": null,
+    #     "pii_jury_dual_juror": false,
+    #     "pii_jury_sampling": "tiered",
+    #     "pii_jury_disagreement_policy": "operator_review",
+    #     "subject_protection_cache_max_mb": 50
+    #   }
+
+    # Master switch for Phase 6 preflight. False = preflight skipped entirely
+    # (useful for synthetic-test cases that have no real people-register).
+    people_register_enabled: bool = True
+
+    # Explicit operator bypass (mirrors force_skip_fitness_reason).
+    # Non-empty string → preflight emits SKIP audit event and proceeds.
+    # None (or empty string) means no skip; preflight runs normally.
+    force_skip_people_register_reason: Optional[str] = None
+
+    # Explicit operator opt-in for dual-juror mode (Phase 5 Task 3).
+    pii_jury_dual_juror: bool = False
+
+    # Sampling policy for the PII jury.
+    # "tiered"     → spec §1.8 16-cell JURY_SAMPLE_RATES matrix (default).
+    # "full"       → rate=1.0 across all bins.
+    # "spot_check" → rate=0.05 across all bins.
+    pii_jury_sampling: Literal["full", "tiered", "spot_check"] = "tiered"
+
+    # Disagreement resolution policy for the PII jury.
+    # "operator_review" → manual triage (current Phase 5 behaviour).
+    # "redact_safer"    → auto-resolve by picking the stricter verdict (v2).
+    pii_jury_disagreement_policy: Literal["operator_review", "redact_safer"] = "operator_review"
+
+    # LRU trim cap for gates/subject_protection.py cache (spec §1.6). Must be > 0.
+    subject_protection_cache_max_mb: int = 50
+
+
+def _validate_literal(name: str, value: str, valid: frozenset[str]) -> str:
+    """Raise ValueError if *value* is not in *valid*; return *value* otherwise."""
+    if value not in valid:
+        raise ValueError(f"case_config field {name!r}={value!r}; expected one of {sorted(valid)}")
+    return value
+
+
+def _validate_cache_mb(value: int) -> int:
+    """Raise ValueError if *value* is not > 0."""
+    if value <= 0:
+        raise ValueError(
+            f"case_config field 'subject_protection_cache_max_mb'={value!r}; must be > 0"
+        )
+    return value
 
 
 def _read_override_file(name: str) -> str | None:
@@ -220,6 +281,23 @@ def load_case_config(case_no: str, case_root: Path | None = None) -> CaseConfig:
                 "DSAR_FORCE_SKIP_FITNESS_REASON",
                 raw.get("force_skip_fitness_reason", "") or "",
             )
+        ),
+        # Phase 6 — people-register-hardening
+        people_register_enabled=bool(raw.get("people_register_enabled", True)),
+        force_skip_people_register_reason=raw.get("force_skip_people_register_reason") or None,
+        pii_jury_dual_juror=bool(raw.get("pii_jury_dual_juror", False)),
+        pii_jury_sampling=_validate_literal(
+            "pii_jury_sampling",
+            raw.get("pii_jury_sampling", "tiered"),
+            _VALID_PII_JURY_SAMPLING,
+        ),
+        pii_jury_disagreement_policy=_validate_literal(
+            "pii_jury_disagreement_policy",
+            raw.get("pii_jury_disagreement_policy", "operator_review"),
+            _VALID_PII_JURY_DISAGREEMENT,
+        ),
+        subject_protection_cache_max_mb=_validate_cache_mb(
+            int(raw.get("subject_protection_cache_max_mb", 50))
         ),
     )
     return cfg

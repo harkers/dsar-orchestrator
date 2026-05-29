@@ -16,14 +16,17 @@ from dsar_orchestrator.pipeline import STAGE_ORDER, build_stage_plan, run
 # ─── stage planning ───
 
 
-def test_stage_order_includes_all_ten_stages() -> None:
+def test_stage_order_includes_all_stages() -> None:
     assert STAGE_ORDER == (
         "ingest",
         "stage_2_parallel",
         "stage_3_parallel",
+        "sig_block_discovery",
         "scope_classify",
         "pii_classify",
         "redact",
+        "presidio_anonymize",
+        "pii_jury_review",
         "verify_spec",
         "bake",
         "verify_pdf",

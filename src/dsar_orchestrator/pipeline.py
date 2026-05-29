@@ -27,9 +27,18 @@ from pathlib import Path
 
 from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
 from dsar_orchestrator.config import CaseConfig, load_case_config, validate_phase_4_prereqs
+import re as _re
+
 from dsar_orchestrator.exceptions import (
     DSARPipelineError,
+    EmptyIngestError,
+    ExtractionQualityCatastrophicError,
+    PeopleRegisterBuildError,
+    PeopleRegisterEmptyError,
     PipelineHalt,
+    SubjectInDenylistPipelineError,
+    ThreatModelIncompleteError,
+    ThreatModelMissingError,
 )
 
 # Stage identifiers — used by --from/--through/--only and the resume
@@ -44,9 +53,12 @@ STAGE_ORDER: tuple[str, ...] = (
     "ingest",
     "stage_2_parallel",  # { embed ∥ detect_2_1_to_2_4 }
     "stage_3_parallel",  # { people_register ∥ (scope_prefilter → rerank) }
+    "sig_block_discovery",  # Phase 3 Task 2 — post-people_register regex pass
     "scope_classify",
     "pii_classify",
     "redact",
+    "presidio_anonymize",  # Presidio defense-in-depth (always-on)
+    "pii_jury_review",  # Phase 5 Task 4 — post-redact jury
     "verify_spec",  # NEW in v5.5 (pre-bake plan check)
     "bake",  # NEW in v5.0
     "verify_pdf",
@@ -59,9 +71,12 @@ SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),
     "stage_2_parallel": ("embed", "detect_2_1_to_2_4"),
     "stage_3_parallel": ("people_register", "scope_prefilter", "rerank"),
+    "sig_block_discovery": ("sig_block_discovery",),
     "scope_classify": ("scope_classify",),
     "pii_classify": ("pii_classify",),
     "redact": ("redact",),
+    "presidio_anonymize": ("presidio_anonymize",),
+    "pii_jury_review": ("pii_jury_review",),
     "verify_spec": ("verify_spec",),  # NEW in v5.5
     "bake": ("bake",),  # NEW in v5.0
     "verify_pdf": ("verify_pdf",),
@@ -373,6 +388,27 @@ def _run_redact(cfg: CaseConfig) -> None:
     _check_module_work(cfg, "redact")
 
 
+def _run_sig_block_discovery(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import sig_block_discovery as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "sig_block_discovery")
+
+
+def _run_pii_jury_review(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import pii_jury_review as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "pii_jury_review")
+
+
+def _run_presidio_anonymize(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import presidio_anonymize as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "presidio_anonymize")
+
+
 def _run_verify_spec(cfg: CaseConfig) -> RunReport | None:
     """Returns None on success; raises PipelineHalt on any verifier failure.
 
@@ -647,6 +683,459 @@ def _run_fitness_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
         )
 
 
+def _corpus_has_communicants(case_path: Path) -> bool:
+    """Spec §2.1 helper: does the corpus have communicants?
+
+    A 'communicant' is signalled by ANY of:
+      - register.json entry with non-null mailbox_owner_email
+      - register.json entry with a non-empty source_kind
+      - register.json entry filename ending .eml / .msg
+      - any .eml / .msg file present under working/ or redacted/
+        (catches the case where ingest itself silently failed to record
+        the ref — exactly the case-301770 silent-empty class)
+
+    Phase 6 v1 heuristic; used to distinguish 'empty register because
+    corpus is genuinely empty' from 'empty register because Phase 1
+    build silently failed'."""
+    working = case_path / "working"
+    register_path = working / "register.json"
+    if register_path.exists():
+        try:
+            refs = json.loads(register_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            refs = None
+        if isinstance(refs, list):
+            for r in refs:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("mailbox_owner_email"):
+                    return True
+                sk = r.get("source_kind")
+                if isinstance(sk, str) and sk.strip():
+                    return True
+                fn = r.get("filename") or ""
+                if isinstance(fn, str) and fn.lower().endswith((".eml", ".msg")):
+                    return True
+    # Directory scan fallback — catches ingest-side failures where the
+    # register didn't get written / is missing entries.
+    for d in (working, case_path / "redacted"):
+        if d.exists():
+            for p in d.iterdir():
+                if p.is_file() and p.name.lower().endswith((".eml", ".msg")):
+                    return True
+    return False
+
+
+def _emit_people_register_skip_event(case_path: Path, reason: str) -> None:
+    """Write a PEOPLE_REGISTER_GATE_BYPASSED audit event with the operator's
+    skip reason."""
+    try:
+        from dsar_pipeline.audit import AuditEventType, FileAuditStore
+
+        event_type = getattr(AuditEventType, "PEOPLE_REGISTER_GATE_BYPASSED", None)
+        if event_type is None:
+            event_type = AuditEventType.PEOPLE_REGISTER_BUILT  # closest existing
+        store = FileAuditStore(working_dir=case_path / "working")
+        store.append_event(
+            event_type=event_type,
+            payload={
+                "reason": reason,
+                "bypass_kind": "force_skip_people_register_reason",
+            },
+            case_id=case_path.name,
+            agent="orchestrator",
+            stage="people_register_preflight",
+        )
+    except Exception as exc:
+        import sys
+
+        print(
+            f"[people_register_preflight] audit emit failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+def _run_subject_protection_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §1.6. Cross-check the operator-curated third_party_denylist
+    against data_subject.json via embed.cosine fuzzy match.
+
+    Graceful degradations:
+      - No working/third_party_denylist.json yet (operator hasn't
+        reviewed) -> skip silently. The redact stage's in-stage
+        _filter_subject_identifiers is the v1 defense-in-depth fallback.
+      - TEI embed server unreachable -> SOFT WARNING + audit note,
+        proceed. The in-stage filter still applies; NO auto-fallback
+        to a different model (would invalidate ROPA reproducibility).
+      - validate_denylist_against_subject raises SubjectInDenylistError
+        -> hard halt via SubjectInDenylistPipelineError. Operator must
+        fix the denylist or data_subject.json.
+    """
+    with StageBanner(auditor, "subject_protection_preflight"):
+        denylist_path = cfg.case_path / "working" / "third_party_denylist.json"
+        if not denylist_path.exists():
+            auditor.note(
+                "subject_protection_preflight",
+                "no third_party_denylist.json yet; preflight skipped "
+                "(operator must run /people-register console first)",
+            )
+            return
+
+        try:
+            from dsar_pipeline.gates.subject_protection import (
+                SubjectInDenylistError,
+                validate_denylist_against_subject,
+            )
+            from dsar_pipeline.tei_embed_model_adapter import (
+                EmbedModelUnavailableError,
+                TeiEmbedModelAdapter,
+            )
+        except (ImportError, AttributeError) as exc:
+            auditor.note(
+                "subject_protection_preflight",
+                f"toolkit infrastructure unavailable: {exc!r}; skipping",
+            )
+            return
+
+        # Adapter construction and the cross-check call are both inside
+        # the EmbedModelUnavailableError catch — construction itself may
+        # probe TEI for the manifest signature, and either path's
+        # connection failure must surface as a soft warning, not a crash
+        # (DeepSeek convergent jury finding).
+        try:
+            adapter = TeiEmbedModelAdapter()
+            validate_denylist_against_subject(cfg.case_path, adapter)
+        except EmbedModelUnavailableError as exc:
+            # Soft warning: TEI server isn't up. Don't auto-fallback;
+            # operator should investigate. The in-stage filter in
+            # RedactStage (_filter_subject_identifiers) provides v1
+            # defense-in-depth fallback.
+            auditor.note(
+                "subject_protection_preflight",
+                f"WARN: TEI embed unavailable ({exc!r}); cross-check "
+                f"skipped. RedactStage in-stage filter still applies.",
+            )
+            return
+        except SubjectInDenylistError as exc:
+            raise SubjectInDenylistPipelineError(
+                f"case={cfg.case_no}: subject-protection cross-check "
+                f"failed: {exc}. Fix the denylist or data_subject.json "
+                f"via /people-register console before re-running."
+            ) from exc
+
+        auditor.note(
+            "subject_protection_preflight",
+            "OK: no denylist entry fuzzy-matches a subject identifier",
+        )
+
+
+def _run_people_register_preflight(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.1. Pre-flight gate before redact stage.
+
+    No-op when cfg.people_register_enabled is False. Halts with
+    PeopleRegisterBuildError if build_people_register doesn't produce
+    a register file. Halts with PeopleRegisterEmptyError if the
+    produced register has zero third-party clusters on a corpus that
+    HAS communicants (people_register_enabled but build silently empty
+    = case 301770 silent-empty bug, which the whole project addresses).
+
+    Force-skip via cfg.force_skip_people_register_reason records an
+    audit event + proceeds.
+    """
+    if not cfg.people_register_enabled:
+        auditor.note(
+            "people_register_preflight",
+            "people_register_enabled=False; preflight skipped by config",
+        )
+        return
+
+    with StageBanner(auditor, "people_register_preflight"):
+        register_path = cfg.case_path / "working" / "people_register.json"
+
+        # Force-skip path
+        skip_reason = (cfg.force_skip_people_register_reason or "").strip()
+        if skip_reason:
+            _emit_people_register_skip_event(cfg.case_path, skip_reason)
+            auditor.note(
+                "people_register_preflight",
+                f"force_skip_people_register: {skip_reason!r}",
+            )
+            return
+
+        # Auto-build if missing
+        if not register_path.exists():
+            try:
+                from dsar_pipeline.build_people_register import build_people_register
+            except ImportError as exc:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: dsar_pipeline.build_people_register unavailable: {exc!r}"
+                ) from exc
+            try:
+                build_people_register(cfg.case_path)
+            except Exception as exc:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: build_people_register raised: {exc!r}"
+                ) from exc
+            if not register_path.exists():
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: build_people_register did not "
+                    f"produce {register_path}. Source-strategy detection: "
+                    f"check ingest output."
+                )
+
+        # Parse the register — malformed JSON is a build artifact failure
+        # the operator must fix before redact can proceed (deferring to a
+        # generic JSONDecodeError trace would crash the pipeline without
+        # the structured PeopleRegisterBuildError the conductor expects).
+        try:
+            register_raw_bytes = register_path.read_bytes()
+            register = json.loads(register_raw_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PeopleRegisterBuildError(
+                f"case={cfg.case_no}: people_register.json unreadable / "
+                f"malformed: {exc!r}. Re-run dsar-build-people-register "
+                f"or hand-fix the file."
+            ) from exc
+
+        # Sufficiency check
+        register = json.loads(register_path.read_text(encoding="utf-8"))
+        third_party_clusters = [c for c in register if not c.get("is_data_subject")]
+
+        if not third_party_clusters and _corpus_has_communicants(cfg.case_path):
+            raise PeopleRegisterEmptyError(
+                f"case={cfg.case_no}: people_register has zero third-party "
+                f"clusters but corpus contains communicants. Likely source-"
+                f"strategy misdetection or extraction failure. Run "
+                f"`dsar-build-people-register --case {cfg.case_no}` manually "
+                f"and inspect the source_strategy detection output."
+            )
+
+        # Strategy-specific validation. Narrow except to ImportError +
+        # AttributeError ONLY — those are infrastructure-availability
+        # conditions (older toolkit install missing source_strategies
+        # module or the default_registry symbol). Any OTHER exception
+        # (strategy.validate raising on a real validation failure, or a
+        # network error from a future remote strategy) MUST propagate so
+        # the gate enforces what spec §2.1 says it enforces.
+        try:
+            from dsar_pipeline.source_strategies import default_registry
+        except (ImportError, AttributeError) as exc:
+            auditor.note(
+                "people_register_preflight",
+                f"source_strategies unavailable; skipping strategy validation: {exc!r}",
+            )
+        else:
+            strategy = default_registry().select_strategy(cfg.case_path)
+            validation = strategy.validate(register)
+            if not validation.valid:
+                raise PeopleRegisterBuildError(
+                    f"case={cfg.case_no}: strategy={strategy.name} validation "
+                    f"failed: {validation.errors}"
+                )
+
+        auditor.note(
+            "people_register_preflight",
+            f"OK: {len(third_party_clusters)} third-party clusters",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Phase 6 Task 3: extraction-quality gate (spec §2.4 R4/R5)
+# ─────────────────────────────────────────────────────────────────
+
+
+def _load_refs_for_quality_check(case_path: Path) -> list[dict]:
+    """Read working/register.json; return [] on any error so the caller
+    raises EmptyIngestError with a clean message."""
+    p = case_path / "working" / "register.json"
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [r for r in data if isinstance(r, dict)]
+
+
+def _emit_extraction_quality_warning(case_path: Path, rate: float, refs_total: int) -> None:
+    """Write an EXTRACTION_QUALITY_GATE_WARNING audit event. Falls back
+    to a generic event type + stderr if the new enum value isn't
+    available on the installed toolkit (older deploys)."""
+    try:
+        from dsar_pipeline.audit import AuditEventType, FileAuditStore
+
+        event_type = getattr(AuditEventType, "EXTRACTION_QUALITY_GATE_WARNING", None)
+        if event_type is None:
+            event_type = AuditEventType.PEOPLE_REGISTER_BUILT  # closest existing
+        store = FileAuditStore(working_dir=case_path / "working")
+        store.append_event(
+            event_type=event_type,
+            payload={
+                "ocr_failure_rate": round(rate, 4),
+                "refs_total": refs_total,
+                "soft_gate_threshold": 0.10,
+                "hard_halt_threshold": 0.50,
+            },
+            case_id=case_path.name,
+            agent="orchestrator",
+            stage="extraction_quality_gate",
+        )
+    except (ImportError, AttributeError) as exc:
+        import sys
+
+        print(
+            f"[extraction_quality_gate] audit emit failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+def _check_extraction_quality(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.4 R4/R5. Soft + hard gate on extraction-quality posture.
+
+    - 0 refs   -> EmptyIngestError (hard halt; nothing to redact)
+    - >50% OCR -> ExtractionQualityCatastrophicError (hard halt; operator
+                  must triage extraction upstream)
+    - >10% OCR -> EXTRACTION_QUALITY_GATE_WARNING audit event (soft gate;
+                  operator can review and proceed with reduced set)
+    """
+    with StageBanner(auditor, "extraction_quality_gate"):
+        refs = _load_refs_for_quality_check(cfg.case_path)
+        if not refs:
+            raise EmptyIngestError(
+                f"case={cfg.case_no}: 0 refs ingested. Nothing to redact. "
+                f"Check ingest stage output."
+            )
+        ocr_failures = sum(1 for r in refs if (r.get("text_quality") or "unknown") == "ocr_failure")
+        rate = ocr_failures / len(refs)
+
+        if rate > 0.50:
+            raise ExtractionQualityCatastrophicError(
+                f"case={cfg.case_no}: ocr_failure rate {rate:.1%} > 50%. "
+                f"Halt pipeline; operator must triage extraction failures "
+                f"upstream before redaction can proceed."
+            )
+
+        if rate > 0.10:
+            _emit_extraction_quality_warning(cfg.case_path, rate, len(refs))
+            auditor.note(
+                "extraction_quality_gate",
+                f"WARN: ocr_failure rate {rate:.1%} > 10% "
+                f"(threshold for hard halt: 50%). Proceeding.",
+            )
+            return
+
+        auditor.note(
+            "extraction_quality_gate",
+            f"OK: {len(refs)} refs, ocr_failure {rate:.1%}",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Phase 6 Task 4: threat-model content verifier (spec §2.5 R4/R5)
+# ─────────────────────────────────────────────────────────────────
+
+_THREAT_MODEL_HEADING_RE = _re.compile(r"^#{1,3}\s+(.+?)\s*$", _re.MULTILINE)
+_THREAT_MODEL_REQUIRED_SECTIONS = frozenset(
+    {
+        "embed endpoint",
+        "isolation posture",
+        "denylist scope",
+        "per-engagement data flow",
+        "subject identifier handling",
+    }
+)
+_THREAT_MODEL_MIN_SECTION_CHARS = 30
+
+
+def _normalise_heading(text: str) -> str:
+    return text.strip().lstrip("#").strip().lower()
+
+
+def _extract_section_body(content: str, section_name_lower: str) -> str:
+    matches = list(_THREAT_MODEL_HEADING_RE.finditer(content))
+    for i, m in enumerate(matches):
+        if _normalise_heading(m.group(1)) != section_name_lower:
+            continue
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        return content[body_start:body_end]
+    return ""
+
+
+def _verify_threat_model(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.5 R4/R5. Validates working/threat_model.md content.
+
+    - Missing file -> ThreatModelMissingError
+    - Missing section -> ThreatModelIncompleteError
+    - Section under 30 chars of content -> ThreatModelIncompleteError
+    """
+    with StageBanner(auditor, "threat_model_verify"):
+        # Route through _safe_case_path for containment per spec §2.5 (and
+        # the general security note in §1.6 / §1.5). Toolkit helper raises
+        # UnsafeCasePathError on traversal / null bytes / absolute relpath.
+        try:
+            from dsar_pipeline.gates.safe_case_path import (
+                UnsafeCasePathError,
+                _safe_case_path,
+            )
+
+            tm_path = _safe_case_path(cfg.case_path, "working/threat_model.md")
+        except UnsafeCasePathError as exc:
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: threat_model.md path containment violation: {exc!r}"
+            ) from exc
+        except (ImportError, AttributeError):
+            # Older toolkit install without safe_case_path — fall back to
+            # direct path construction. The conductor caller is trusted;
+            # the spec's containment requirement is defence-in-depth.
+            tm_path = cfg.case_path / "working" / "threat_model.md"
+        if not tm_path.exists():
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: working/threat_model.md not found. "
+                f"Operator must author this artefact per spec §2.5 with "
+                f"sections covering: "
+                f"{sorted(_THREAT_MODEL_REQUIRED_SECTIONS)}."
+            )
+
+        try:
+            content = tm_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: threat_model.md unreadable: {exc!r}"
+            ) from exc
+
+        found = {_normalise_heading(m.group(1)) for m in _THREAT_MODEL_HEADING_RE.finditer(content)}
+        missing = _THREAT_MODEL_REQUIRED_SECTIONS - found
+        if missing:
+            raise ThreatModelIncompleteError(
+                f"case={cfg.case_no}: threat_model.md missing required "
+                f"sections: {sorted(missing)}. Required: "
+                f"{sorted(_THREAT_MODEL_REQUIRED_SECTIONS)}."
+            )
+
+        short_sections: list[tuple[str, int]] = []
+        for section in _THREAT_MODEL_REQUIRED_SECTIONS:
+            body = _extract_section_body(content, section)
+            chars = len(body.strip())
+            if chars < _THREAT_MODEL_MIN_SECTION_CHARS:
+                short_sections.append((section, chars))
+        if short_sections:
+            raise ThreatModelIncompleteError(
+                f"case={cfg.case_no}: threat_model.md sections under "
+                f"{_THREAT_MODEL_MIN_SECTION_CHARS} chars: "
+                f"{[(s, c) for s, c in short_sections]}. Each section "
+                f"must contain at least {_THREAT_MODEL_MIN_SECTION_CHARS} "
+                f"chars of substantive content."
+            )
+
+        auditor.note(
+            "threat_model_verify",
+            f"OK: all {len(_THREAT_MODEL_REQUIRED_SECTIONS)} required "
+            f"sections present with sufficient content",
+        )
+
+
 # ─────────────────────────────────────────────────────────────────
 # The orchestrator entry point
 # ─────────────────────────────────────────────────────────────────
@@ -724,6 +1213,22 @@ def run(
         # cfg.fitness_check_enabled is False.
         _run_fitness_preflight(cfg, audit)
 
+        # Phase 6 (spec §2.1): people-register pre-flight. Halts BEFORE
+        # any stage runs if the register is missing or empty on a corpus
+        # that has communicants. Skipped when
+        # cfg.people_register_enabled is False.
+        _run_people_register_preflight(cfg, audit)
+
+        # Phase 6 (spec §2.4 R4/R5): extraction-quality gate. Halts on
+        # 0 refs or >50% OCR failure; soft-warns on >10%.
+        _check_extraction_quality(cfg, audit)
+
+        # Phase 6 (spec §2.5 R4/R5): threat-model content verifier.
+        _verify_threat_model(cfg, audit)
+
+        # Spec §1.6: subject-protection cross-check (people-register hardening).
+        _run_subject_protection_preflight(cfg, audit)
+
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):
             with StageBanner(audit, "ingest"):
@@ -739,6 +1244,12 @@ def run(
             with StageBanner(audit, "stage_3_parallel"):
                 _run_stage_3_parallel(cfg)
 
+        # sig_block_discovery — Phase 3 Task 2; enriches people_register
+        # before the operator review / redact denylist is consumed.
+        if plan.includes("sig_block_discovery"):
+            with StageBanner(audit, "sig_block_discovery"):
+                _run_sig_block_discovery(cfg)
+
         # Stage 4 — LLM scope-classify (Sonnet 4.6, semaphore-gated)
         if plan.includes("scope_classify"):
             with StageBanner(audit, "scope_classify"):
@@ -753,6 +1264,16 @@ def run(
         if plan.includes("redact"):
             with StageBanner(audit, "redact"):
                 _run_redact(cfg)
+
+        # Presidio Anonymizer — always-on extra defense-in-depth pass.
+        if plan.includes("presidio_anonymize"):
+            with StageBanner(audit, "presidio_anonymize"):
+                _run_presidio_anonymize(cfg)
+
+        # PII jury — Phase 5 Task 4 post-redact defense-in-depth review.
+        if plan.includes("pii_jury_review"):
+            with StageBanner(audit, "pii_jury_review"):
+                _run_pii_jury_review(cfg)
 
         # Stage 7 — verify-spec (v5.5; pre-bake plan check, halt-on-fail)
         if plan.includes("verify_spec"):

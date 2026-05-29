@@ -208,3 +208,123 @@ def test_case_config_force_skip_fitness_env_overrides_yaml(tmp_path, monkeypatch
     monkeypatch.setenv("DSAR_FORCE_SKIP_FITNESS_REASON", "from-env")
     cfg = load_case_config("TEST", case_root=case_dir)
     assert cfg.force_skip_fitness_reason == "from-env"
+
+
+# ─── Phase 6 — people-register-hardening fields (spec §2.2) ───
+
+
+def _minimal_case(tmp_path: Path, name: str = "PRTEST", extra: dict | None = None) -> Path:
+    """Write a minimal case_config.json and return the case dir."""
+    case_dir = tmp_path / name
+    case_dir.mkdir()
+    payload: dict = {"case_no": name, "case_scope": "x"}
+    if extra:
+        payload.update(extra)
+    (case_dir / "case_config.json").write_text(json.dumps(payload), encoding="utf-8")
+    return case_dir
+
+
+def test_people_register_fields_default(tmp_path: Path) -> None:
+    """All Phase 6 fields have correct spec-mandated defaults."""
+    cfg = load_case_config("PRTEST", case_root=_minimal_case(tmp_path))
+    assert cfg.people_register_enabled is True
+    assert cfg.force_skip_people_register_reason is None
+    assert cfg.pii_jury_dual_juror is False
+    assert cfg.pii_jury_sampling == "tiered"
+    assert cfg.pii_jury_disagreement_policy == "operator_review"
+    assert cfg.subject_protection_cache_max_mb == 50
+
+
+def test_people_register_fields_from_json(tmp_path: Path) -> None:
+    """All Phase 6 fields can be overridden from case_config.json."""
+    case_dir = _minimal_case(
+        tmp_path,
+        extra={
+            "people_register_enabled": False,
+            "force_skip_people_register_reason": "synthetic run",
+            "pii_jury_dual_juror": True,
+            "pii_jury_sampling": "full",
+            "pii_jury_disagreement_policy": "redact_safer",
+            "subject_protection_cache_max_mb": 100,
+        },
+    )
+    cfg = load_case_config("PRTEST", case_root=case_dir)
+    assert cfg.people_register_enabled is False
+    assert cfg.force_skip_people_register_reason == "synthetic run"
+    assert cfg.pii_jury_dual_juror is True
+    assert cfg.pii_jury_sampling == "full"
+    assert cfg.pii_jury_disagreement_policy == "redact_safer"
+    assert cfg.subject_protection_cache_max_mb == 100
+
+
+def test_force_skip_people_register_reason_none_by_default(tmp_path: Path) -> None:
+    """force_skip_people_register_reason defaults to None, not empty string."""
+    cfg = load_case_config("PRTEST", case_root=_minimal_case(tmp_path))
+    assert cfg.force_skip_people_register_reason is None
+
+
+def test_force_skip_people_register_reason_empty_string_treated_as_none(tmp_path: Path) -> None:
+    """Empty string in JSON is coerced to None (no skip)."""
+    case_dir = _minimal_case(tmp_path, extra={"force_skip_people_register_reason": ""})
+    cfg = load_case_config("PRTEST", case_root=case_dir)
+    assert cfg.force_skip_people_register_reason is None
+
+
+def test_force_skip_people_register_reason_null_json_treated_as_none(tmp_path: Path) -> None:
+    """Explicit JSON null coerces to None."""
+    case_dir = _minimal_case(tmp_path, extra={"force_skip_people_register_reason": None})
+    cfg = load_case_config("PRTEST", case_root=case_dir)
+    assert cfg.force_skip_people_register_reason is None
+
+
+def test_subject_protection_cache_max_mb_zero_raises(tmp_path: Path) -> None:
+    """subject_protection_cache_max_mb=0 raises ValueError."""
+    case_dir = _minimal_case(tmp_path, extra={"subject_protection_cache_max_mb": 0})
+    with pytest.raises(ValueError, match="subject_protection_cache_max_mb"):
+        load_case_config("PRTEST", case_root=case_dir)
+
+
+def test_subject_protection_cache_max_mb_negative_raises(tmp_path: Path) -> None:
+    """Negative value raises ValueError."""
+    case_dir = _minimal_case(tmp_path, extra={"subject_protection_cache_max_mb": -1})
+    with pytest.raises(ValueError, match="subject_protection_cache_max_mb"):
+        load_case_config("PRTEST", case_root=case_dir)
+
+
+def test_pii_jury_sampling_invalid_raises(tmp_path: Path) -> None:
+    """Unknown pii_jury_sampling value raises ValueError with the field name."""
+    case_dir = _minimal_case(tmp_path, extra={"pii_jury_sampling": "random"})
+    with pytest.raises(ValueError, match="pii_jury_sampling"):
+        load_case_config("PRTEST", case_root=case_dir)
+
+
+def test_pii_jury_sampling_spot_check_accepted(tmp_path: Path) -> None:
+    """'spot_check' is a valid pii_jury_sampling value."""
+    case_dir = _minimal_case(tmp_path, extra={"pii_jury_sampling": "spot_check"})
+    cfg = load_case_config("PRTEST", case_root=case_dir)
+    assert cfg.pii_jury_sampling == "spot_check"
+
+
+def test_pii_jury_disagreement_policy_invalid_raises(tmp_path: Path) -> None:
+    """Unknown pii_jury_disagreement_policy raises ValueError with the field name."""
+    case_dir = _minimal_case(tmp_path, extra={"pii_jury_disagreement_policy": "flip_coin"})
+    with pytest.raises(ValueError, match="pii_jury_disagreement_policy"):
+        load_case_config("PRTEST", case_root=case_dir)
+
+
+def test_pii_jury_disagreement_policy_redact_safer_accepted(tmp_path: Path) -> None:
+    """'redact_safer' is a valid pii_jury_disagreement_policy value."""
+    case_dir = _minimal_case(tmp_path, extra={"pii_jury_disagreement_policy": "redact_safer"})
+    cfg = load_case_config("PRTEST", case_root=case_dir)
+    assert cfg.pii_jury_disagreement_policy == "redact_safer"
+
+
+def test_case_config_dataclass_defaults_phase6() -> None:
+    """CaseConfig constructed directly has correct Phase 6 defaults (no JSON loading)."""
+    cfg = CaseConfig(case_no="X", case_path=Path("/tmp"))
+    assert cfg.people_register_enabled is True
+    assert cfg.force_skip_people_register_reason is None
+    assert cfg.pii_jury_dual_juror is False
+    assert cfg.pii_jury_sampling == "tiered"
+    assert cfg.pii_jury_disagreement_policy == "operator_review"
+    assert cfg.subject_protection_cache_max_mb == 50

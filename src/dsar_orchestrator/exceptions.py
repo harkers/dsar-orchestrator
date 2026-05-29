@@ -24,3 +24,37 @@ class UpstreamHashMismatch(DSARPipelineError):
     """An artefact's recorded upstream_hash doesn't match the current
     upstream state. Message includes the artefact path + the re-run
     instruction that would resolve it."""
+
+
+class PeopleRegisterBuildError(PipelineHalt):
+    """Spec §2.1: build_people_register didn't produce a usable register."""
+
+
+class PeopleRegisterEmptyError(PipelineHalt):
+    """Spec §2.1: register has zero third-party clusters on a non-empty
+    communicant corpus — the case-301770 silent-empty class of bug."""
+
+
+class EmptyIngestError(PipelineHalt):
+    """Spec §2.4: 0 refs ingested — nothing for the pipeline to redact."""
+
+
+class ExtractionQualityCatastrophicError(PipelineHalt):
+    """Spec §2.4: >50% of refs failed text extraction — operator must
+    triage upstream before redaction can produce a defensible pack."""
+
+
+class ThreatModelMissingError(PipelineHalt):
+    """Spec §2.5: working/threat_model.md absent — required per engagement."""
+
+
+class ThreatModelIncompleteError(PipelineHalt):
+    """Spec §2.5: threat_model.md missing required section(s) or has
+    sections under the minimum content length."""
+
+
+class SubjectInDenylistPipelineError(PipelineHalt):
+    """Spec §1.6: validate_denylist_against_subject detected a fuzzy
+    match between a denylist entry and a subject identifier (embed.cosine
+    threshold 0.85). Operator must fix the denylist or data_subject.json
+    via the /people-register console before redact can proceed."""
