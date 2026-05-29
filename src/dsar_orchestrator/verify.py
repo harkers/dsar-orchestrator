@@ -279,3 +279,161 @@ def verify_fitness_report(case_dir: Path) -> VerifyResult:
         return result
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: people-register verification
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _VerifyAuditor:
+    """Silent auditor used by verify_people_register.
+
+    Captures notes for inclusion in the report without emitting
+    StageBanner events to disk (read-only verify pass, not a real run).
+    """
+
+    case_no: str = ""
+    notes: list[tuple[str, str]] = field(default_factory=list)
+    stages_run: list[str] = field(default_factory=list)
+    stages_skipped: list[str] = field(default_factory=list)
+    halted: bool = False
+    halt_reason: str = ""
+
+    def note(self, kind: str, message: str, **_extra: Any) -> None:
+        self.notes.append((kind, message))
+
+    def write(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    def mark_skipped(self, stage: str, reason: str) -> None:
+        self.stages_skipped.append(stage)
+
+    def mark_halted(self, reason: str) -> None:
+        self.halted = True
+        self.halt_reason = reason
+
+
+def verify_people_register(case_path: Path) -> dict[str, Any]:
+    """Run spec §2.1 / §2.4 / §2.5 preflights as a standalone verify pass.
+
+    Returns ``{"ok": bool, "message": str, "details": dict}``.
+    """
+    from dsar_orchestrator.config import CaseConfig
+    from dsar_orchestrator.exceptions import PipelineHalt
+    from dsar_orchestrator.pipeline import (
+        _check_extraction_quality,
+        _run_people_register_preflight,
+        _verify_threat_model,
+    )
+
+    cfg = CaseConfig(
+        case_no=case_path.name,
+        case_path=case_path,
+        fitness_check_enabled=False,
+    )
+    auditor = _VerifyAuditor(case_no=cfg.case_no)
+
+    errors: list[tuple[str, str]] = []
+    for _label, fn in (
+        ("people_register_preflight", _run_people_register_preflight),
+        ("extraction_quality_gate", _check_extraction_quality),
+        ("threat_model_verify", _verify_threat_model),
+    ):
+        try:
+            fn(cfg, auditor)
+        except PipelineHalt as exc:
+            errors.append((type(exc).__name__, str(exc)))
+
+    details = _compute_people_register_verify_details(case_path)
+
+    if errors:
+        return {
+            "ok": False,
+            "message": "; ".join(f"{name}: {msg}" for name, msg in errors),
+            "details": details,
+        }
+    return {
+        "ok": True,
+        "message": _format_people_register_ok_message(details),
+        "details": details,
+    }
+
+
+def _compute_people_register_verify_details(case_path: Path) -> dict[str, Any]:
+    working = case_path / "working"
+
+    strategy_name: str | None = None
+    strategy_confidence: float | None = None
+    try:
+        from dsar_pipeline.source_strategies import default_registry
+
+        registry = default_registry()
+        chosen = registry.select_strategy(case_path)
+        confidences = registry.detect_all(case_path)
+        strategy_name = chosen.name
+        strategy_confidence = confidences.get(chosen.name)
+    except Exception:
+        pass
+
+    third_party_clusters = 0
+    subject_clusters = 0
+    register_path = working / "people_register.json"
+    if register_path.exists():
+        try:
+            register = json.loads(register_path.read_text(encoding="utf-8"))
+            if isinstance(register, list):
+                for c in register:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("is_data_subject"):
+                        subject_clusters += 1
+                    else:
+                        third_party_clusters += 1
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    subject_in_denylist_errors = 0
+    cache_path = working / ".subject_protection_cache.json"
+    if cache_path.exists():
+        try:
+            envelope = json.loads(cache_path.read_text(encoding="utf-8"))
+            data = envelope.get("data") if isinstance(envelope, dict) else None
+            if isinstance(data, dict) and data.get("result") == "error":
+                subject_in_denylist_errors = 1
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    manual_queue_refs = 0
+    queue_path = working / "manual_preprocessing_queue.jsonl"
+    if queue_path.exists():
+        try:
+            manual_queue_refs = sum(
+                1 for ln in queue_path.read_text(encoding="utf-8").splitlines() if ln.strip()
+            )
+        except OSError:
+            pass
+
+    return {
+        "source_strategy": strategy_name,
+        "source_strategy_confidence": strategy_confidence,
+        "third_party_clusters": third_party_clusters,
+        "subject_clusters": subject_clusters,
+        "subject_in_denylist_errors": subject_in_denylist_errors,
+        "manual_queue_refs": manual_queue_refs,
+    }
+
+
+def _format_people_register_ok_message(details: dict[str, Any]) -> str:
+    s = details["source_strategy"] or "unknown"
+    c = details["source_strategy_confidence"]
+    c_str = f"confidence {c:.2f}" if c is not None else "confidence ?"
+    sc = details["subject_clusters"]
+    return (
+        f"Source strategy: {s} ({c_str}), "
+        f"{details['third_party_clusters']} third-party clusters, "
+        f"{sc} subject cluster{'s' if sc != 1 else ''}, "
+        f"{details['subject_in_denylist_errors']} SubjectInDenylistError, "
+        f"{details['manual_queue_refs']} refs in manual-preprocessing-queue."
+    )
