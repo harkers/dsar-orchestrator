@@ -42,3 +42,12 @@ class EmptyIngestError(PipelineHalt):
 class ExtractionQualityCatastrophicError(PipelineHalt):
     """Spec §2.4: >50% of refs failed text extraction — operator must
     triage upstream before redaction can produce a defensible pack."""
+
+
+class ThreatModelMissingError(PipelineHalt):
+    """Spec §2.5: working/threat_model.md absent — required per engagement."""
+
+
+class ThreatModelIncompleteError(PipelineHalt):
+    """Spec §2.5: threat_model.md missing required section(s) or has
+    sections under the minimum content length."""

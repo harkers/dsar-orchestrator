@@ -27,6 +27,8 @@ from pathlib import Path
 
 from dsar_orchestrator.audit import PipelineAuditor, RunReport, StageBanner
 from dsar_orchestrator.config import CaseConfig, load_case_config, validate_phase_4_prereqs
+import re as _re
+
 from dsar_orchestrator.exceptions import (
     DSARPipelineError,
     EmptyIngestError,
@@ -34,6 +36,8 @@ from dsar_orchestrator.exceptions import (
     PeopleRegisterBuildError,
     PeopleRegisterEmptyError,
     PipelineHalt,
+    ThreatModelIncompleteError,
+    ThreatModelMissingError,
 )
 
 # Stage identifiers — used by --from/--through/--only and the resume
@@ -927,6 +931,111 @@ def _check_extraction_quality(cfg: CaseConfig, auditor: PipelineAuditor) -> None
 
 
 # ─────────────────────────────────────────────────────────────────
+# Phase 6 Task 4: threat-model content verifier (spec §2.5 R4/R5)
+# ─────────────────────────────────────────────────────────────────
+
+_THREAT_MODEL_HEADING_RE = _re.compile(r"^#{1,3}\s+(.+?)\s*$", _re.MULTILINE)
+_THREAT_MODEL_REQUIRED_SECTIONS = frozenset(
+    {
+        "embed endpoint",
+        "isolation posture",
+        "denylist scope",
+        "per-engagement data flow",
+        "subject identifier handling",
+    }
+)
+_THREAT_MODEL_MIN_SECTION_CHARS = 30
+
+
+def _normalise_heading(text: str) -> str:
+    return text.strip().lstrip("#").strip().lower()
+
+
+def _extract_section_body(content: str, section_name_lower: str) -> str:
+    matches = list(_THREAT_MODEL_HEADING_RE.finditer(content))
+    for i, m in enumerate(matches):
+        if _normalise_heading(m.group(1)) != section_name_lower:
+            continue
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        return content[body_start:body_end]
+    return ""
+
+
+def _verify_threat_model(cfg: CaseConfig, auditor: PipelineAuditor) -> None:
+    """Spec §2.5 R4/R5. Validates working/threat_model.md content.
+
+    - Missing file -> ThreatModelMissingError
+    - Missing section -> ThreatModelIncompleteError
+    - Section under 30 chars of content -> ThreatModelIncompleteError
+    """
+    with StageBanner(auditor, "threat_model_verify"):
+        # Route through _safe_case_path for containment per spec §2.5 (and
+        # the general security note in §1.6 / §1.5). Toolkit helper raises
+        # UnsafeCasePathError on traversal / null bytes / absolute relpath.
+        try:
+            from dsar_pipeline.gates.safe_case_path import (
+                UnsafeCasePathError,
+                _safe_case_path,
+            )
+
+            tm_path = _safe_case_path(cfg.case_path, "working/threat_model.md")
+        except UnsafeCasePathError as exc:
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: threat_model.md path containment violation: {exc!r}"
+            ) from exc
+        except (ImportError, AttributeError):
+            # Older toolkit install without safe_case_path — fall back to
+            # direct path construction. The conductor caller is trusted;
+            # the spec's containment requirement is defence-in-depth.
+            tm_path = cfg.case_path / "working" / "threat_model.md"
+        if not tm_path.exists():
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: working/threat_model.md not found. "
+                f"Operator must author this artefact per spec §2.5 with "
+                f"sections covering: "
+                f"{sorted(_THREAT_MODEL_REQUIRED_SECTIONS)}."
+            )
+
+        try:
+            content = tm_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ThreatModelMissingError(
+                f"case={cfg.case_no}: threat_model.md unreadable: {exc!r}"
+            ) from exc
+
+        found = {_normalise_heading(m.group(1)) for m in _THREAT_MODEL_HEADING_RE.finditer(content)}
+        missing = _THREAT_MODEL_REQUIRED_SECTIONS - found
+        if missing:
+            raise ThreatModelIncompleteError(
+                f"case={cfg.case_no}: threat_model.md missing required "
+                f"sections: {sorted(missing)}. Required: "
+                f"{sorted(_THREAT_MODEL_REQUIRED_SECTIONS)}."
+            )
+
+        short_sections: list[tuple[str, int]] = []
+        for section in _THREAT_MODEL_REQUIRED_SECTIONS:
+            body = _extract_section_body(content, section)
+            chars = len(body.strip())
+            if chars < _THREAT_MODEL_MIN_SECTION_CHARS:
+                short_sections.append((section, chars))
+        if short_sections:
+            raise ThreatModelIncompleteError(
+                f"case={cfg.case_no}: threat_model.md sections under "
+                f"{_THREAT_MODEL_MIN_SECTION_CHARS} chars: "
+                f"{[(s, c) for s, c in short_sections]}. Each section "
+                f"must contain at least {_THREAT_MODEL_MIN_SECTION_CHARS} "
+                f"chars of substantive content."
+            )
+
+        auditor.note(
+            "threat_model_verify",
+            f"OK: all {len(_THREAT_MODEL_REQUIRED_SECTIONS)} required "
+            f"sections present with sufficient content",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
 # The orchestrator entry point
 # ─────────────────────────────────────────────────────────────────
 
@@ -1012,6 +1121,9 @@ def run(
         # Phase 6 (spec §2.4 R4/R5): extraction-quality gate. Halts on
         # 0 refs or >50% OCR failure; soft-warns on >10%.
         _check_extraction_quality(cfg, audit)
+
+        # Phase 6 (spec §2.5 R4/R5): threat-model content verifier.
+        _verify_threat_model(cfg, audit)
 
         # Stage 1 — ingest (serial)
         if plan.includes("ingest"):
