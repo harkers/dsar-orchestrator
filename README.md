@@ -47,6 +47,9 @@ Split because:
 | `src/dsar_orchestrator/hash_chain.py` | `upstream_hash` compute + verify utilities. Shared by all artefact reads/writes the orchestrator drives. |
 | `src/dsar_orchestrator/cli.py` | `dsar-conductor` operator CLI: `--case`, `--from`, `--through`, `--only`, `--check`, `--dry-run`. |
 | `src/dsar_orchestrator/audit.py` | Writes `pipeline.jsonl` per-case audit log (stage banners, durations, outcomes). |
+| `src/dsar_orchestrator/operator_console.py` | Localhost-only operator console (`http.server`): per-case decision pages plus the `/live-log` live-event feed. |
+| `src/dsar_orchestrator/local_broker/live_log_stream.py` | Live-log SSE streaming: tails the L1/L2/L3 JSONL sources through a single merged iterator with composite-cursor resume. |
+| `src/dsar_orchestrator/local_broker/live_log_projection.py` | Fail-closed per-event-type field allowlist + bounded-enum scrubber — the PII boundary for the live feed. |
 | `tests/` | Orchestrator unit + integration tests. |
 | `docs/audit_schemas/pipeline.schema.json` | Schema for the per-case pipeline audit log. |
 
@@ -67,6 +70,30 @@ Strictly one-way: `dsar-orchestrator` imports from `dsar-toolkit`;
 `dsar-toolkit` never imports from `dsar-orchestrator`. The
 orchestrator is the consumer.
 
+## Operator console & live-log feed
+
+`operator_console.py` serves a localhost-only, single-case UI bound to
+`127.0.0.1`. Alongside the decision pages (blockers, leak review, flag
+review, people register, …) it exposes a Plex-style **live-log feed** at
+`/live-log`:
+
+- Tails three layers — `working/audit_events.jsonl` (L1), the per-stage
+  decision/finding jsonls behind a verbose toggle (L2), and the
+  `~/.dsar-audit/<case_no>/pipeline.jsonl` that `PipelineAuditor` already
+  writes (L3). No new producer code — the existing audit log *is* the L3
+  source.
+- Streams to the browser over Server-Sent Events (`/live-log/stream`).
+  Every frame passes a **fail-closed** per-event-type field allowlist +
+  bounded-enum value scrubber, so no raw PII reaches the browser; the one
+  free-text L3 surface (`note().message`) is dropped at the projection
+  boundary.
+- A composite `Last-Event-ID` cursor (byte offsets across all sources)
+  drives auto-reconnect with identity-validate-before-seek (rotation /
+  truncation detected and surfaced as gap markers), a 16 MiB resume
+  backlog cap, and a 15 s heartbeat that itself carries the cursor.
+
+Design: `docs/superpowers/specs/2026-05-29-operator-console-live-log-design-v2.md`.
+
 ## Install
 
 (Until the first release lands — projected once the orchestration
@@ -83,10 +110,12 @@ the toolkit install and remain available for surgical re-runs.
 
 ## Status
 
-**Pre-implementation as of 2026-05-22.** The orchestration design
-specs (v1 + v2 WIP) are landed; the actual Python code lives in
-`src/dsar_orchestrator/` and is the next implementation
-workstream after `dsar-toolkit` Phase 1 ships.
+**Implemented.** The orchestration pipeline, the `dsar-conductor`
+CLI, and the operator console (including the `/live-log` feed) are
+landed in `src/dsar_orchestrator/` with a green unit + integration
+test suite. The versioned design specs under `docs/superpowers/specs/`
+remain the authoritative reference and continue to iterate ahead of
+the code.
 
 ## See also
 
