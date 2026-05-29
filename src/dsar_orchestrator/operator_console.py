@@ -788,6 +788,7 @@ def _case_header(ctx: CaseContext, meta: dict) -> str:
         "<nav>"
         "<a href='/'>Home</a>"
         "<a href='/blockers'>Blockers</a><a href='/unextractable'>Unextractable</a><a href='/leak-review'>Leak review</a><a href='/flag-review'>Flag review</a><a href='/qa-walkthrough'>QA walkthrough</a><a href='/people-register'>People register</a>"
+        "<a href='/live-log'>Live log</a>"
         "<a href='/release-check'>Release readiness</a>"
         "<a href='/pipeline'>Pipeline details</a>"
         "</nav></div>"
@@ -1004,6 +1005,137 @@ def _live_funnel_widget(ctx: CaseContext) -> str:
 <div class='stat'><span class='n'>{funnel["final"]:,}</span><span class='label'>Final disclosure</span></div>
 </div>
 </div>"""
+
+
+_LIVE_LOG_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Live log — operator console</title>
+  <style>
+    body { font: 13px/1.4 -apple-system, system-ui, sans-serif; margin: 0; padding: 0; background: #111; color: #ddd; }
+    header { padding: 8px 12px; background: #222; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 14px; margin: 0; }
+    header label { color: #aaa; }
+    main { padding: 8px 12px; }
+    table { width: 100%; border-collapse: collapse; font-family: ui-monospace, monospace; font-size: 12px; }
+    td { padding: 2px 6px; border-bottom: 1px solid #1c1c1c; vertical-align: top; }
+    tr.gap td { color: #c8a25c; font-style: italic; }
+    tr.error td { color: #d96a6a; }
+    tr.warn td { color: #c8a25c; }
+    .footer { padding: 6px 12px; color: #888; font-size: 12px; }
+    button, input[type=checkbox]+label, input[type=text], select { font-size: 12px; background: #222; color: #ddd; border: 1px solid #333; padding: 2px 6px; }
+    .gap-badge { background: #5c3b1c; color: #fff; padding: 2px 6px; border-radius: 3px; margin-left: 8px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Live log</h1>
+  <button id="pause">Pause</button>
+  <label><input type="checkbox" id="src-audit" checked> audit</label>
+  <label><input type="checkbox" id="src-stage"> stage (verbose)</label>
+  <label><input type="checkbox" id="src-cond" checked> conductor</label>
+  <label>severity <select id="sev"><option value="">all</option><option>info</option><option>warn</option><option>error</option><option>debug</option></select></label>
+  <label>filter <input id="filter" type="text" placeholder="substring"></label>
+  <span id="gap-badge"></span>
+  <span style="margin-left:auto"><a href="/" style="color:#8bb">&larr; back</a></span>
+</header>
+<main>
+  <table id="log"><tbody></tbody></table>
+</main>
+<div class="footer" id="status">connecting&hellip;</div>
+<script>
+(() => {
+  const tbody = document.querySelector("#log tbody");
+  const status = document.getElementById("status");
+  const btnPause = document.getElementById("pause");
+  const fltSrcAudit = document.getElementById("src-audit");
+  const fltSrcStage = document.getElementById("src-stage");
+  const fltSrcCond = document.getElementById("src-cond");
+  const fltSev = document.getElementById("sev");
+  const fltText = document.getElementById("filter");
+  const gapBadge = document.getElementById("gap-badge");
+  let paused = false;
+  let gapCount = 0;
+  let autoscroll = true;
+  let verbose = false;
+
+  window.addEventListener("scroll", () => {
+    autoscroll = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 50;
+  });
+
+  function rebuildEventSource() {
+    if (window.__es) { window.__es.close(); }
+    const url = "/live-log/stream" + (verbose ? "?verbose=1" : "");
+    const es = new EventSource(url);
+    window.__es = es;
+    es.addEventListener("live-log", onFrame);
+    es.onopen = () => { status.textContent = "live"; };
+    es.onerror = () => { status.textContent = "reconnecting..."; };
+  }
+
+  function visible(frame) {
+    if (frame.source === "audit" && !fltSrcAudit.checked) return false;
+    if (frame.source && frame.source.startsWith("stage:") && !fltSrcStage.checked) return false;
+    if (frame.source === "cond" && !fltSrcCond.checked) return false;
+    if (fltSev.value && frame.severity && frame.severity !== fltSev.value) return false;
+    const text = (frame.summary || frame.reason || "");
+    if (fltText.value && !text.includes(fltText.value)) return false;
+    return true;
+  }
+
+  function append(frame) {
+    if (paused || !visible(frame)) return;
+    const tr = document.createElement("tr");
+    tr.classList.add(frame.kind === "gap" ? "gap"
+                     : frame.severity === "error" ? "error"
+                     : frame.severity === "warn" ? "warn" : "");
+    const cells = [
+      frame.ts || "",
+      frame.source || "",
+      frame.event_type || frame.kind || "",
+      frame.summary || frame.reason || frame.msg || "",
+    ];
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+    if (frame.kind === "gap") {
+      gapCount++;
+      gapBadge.textContent = "gaps: " + gapCount;
+      gapBadge.className = "gap-badge";
+    }
+    if (autoscroll) {
+      window.scrollTo({top: document.body.scrollHeight});
+    }
+  }
+
+  function onFrame(ev) {
+    let frame;
+    try { frame = JSON.parse(ev.data); } catch (e) { return; }
+    append(frame);
+  }
+
+  btnPause.addEventListener("click", () => {
+    paused = !paused;
+    btnPause.textContent = paused ? "Resume" : "Pause";
+  });
+  fltSrcStage.addEventListener("change", () => {
+    verbose = fltSrcStage.checked;
+    rebuildEventSource();
+  });
+  rebuildEventSource();
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def render_live_log_page(ctx) -> str:  # noqa: ARG001
+    return _LIVE_LOG_HTML
 
 
 def render_landing(ctx: CaseContext, state: dict, action_result: dict | None) -> str:
@@ -2842,6 +2974,16 @@ class ServerConfig:
 _CFG: ServerConfig | None = None
 _LAST_ACTION_RESULT: dict | None = None
 
+# Live-log SSE tuning (module-level so tests can monkeypatch the
+# heartbeat/poll cadence without waiting the production 15 s).
+_LIVE_LOG_REPLAY_WINDOW_S = 30
+_LIVE_LOG_REPLAY_BYTE_CAP = 16 * 1024 * 1024
+_LIVE_LOG_HEARTBEAT_S = 15.0
+_LIVE_LOG_POLL_INTERVAL = 0.5
+_LIVE_LOG_MAX_LINE_BYTES = 1_048_576
+_LIVE_LOG_MAX_LINES_PER_BURST = 5000
+_LIVE_LOG_MAX_BYTES_PER_BURST = 1_048_576
+
 
 class ConsoleHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
@@ -2857,6 +2999,135 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _ctx(self) -> CaseContext:
         return CaseContext(case_dir=_CFG.case_dir)
+
+    def _serve_live_log_stream(self) -> None:
+        """SSE handler — single-thread merged iterator. Spec §4.2."""
+        import socket
+        import threading as _threading
+
+        from .local_broker.live_log_projection import project_for_browser
+        from .local_broker.live_log_stream import (
+            iter_live_events,
+            parse_composite_last_event_id,
+            write_sse_frame,
+        )
+
+        ctx = self._ctx()
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        verbose_l2 = query.get("verbose", ["0"])[0] == "1"
+
+        try:
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self.connection.settimeout(30.0)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            self.wfile.flush()
+        except OSError:
+            return
+
+        try:
+            resume = parse_composite_last_event_id(
+                self.headers.get("Last-Event-ID"),
+            )
+        except Exception:
+            resume = None
+        skip_replay = resume is not None and resume.is_valid()
+
+        # Handler-side backstop for the heartbeat/gap cursor: the iterator
+        # already stamps composite_cursor on every frame (incl. gaps and
+        # heartbeats), but we also track the most-recent non-heartbeat
+        # cursor here so heartbeats never ship a stale/None id even if the
+        # iterator contract changes (spec §4.2, invariant 10).
+        last_cursor: str | None = None
+
+        stop = _threading.Event()
+        try:
+            for event in iter_live_events(
+                ctx.case_dir,
+                resume=resume,
+                skip_replay=skip_replay,
+                replay_window_s=_LIVE_LOG_REPLAY_WINDOW_S,
+                replay_byte_cap=_LIVE_LOG_REPLAY_BYTE_CAP,
+                heartbeat_s=_LIVE_LOG_HEARTBEAT_S,
+                poll_interval=_LIVE_LOG_POLL_INTERVAL,
+                max_line_bytes=_LIVE_LOG_MAX_LINE_BYTES,
+                max_lines_per_burst=_LIVE_LOG_MAX_LINES_PER_BURST,
+                max_bytes_per_burst=_LIVE_LOG_MAX_BYTES_PER_BURST,
+                stop=stop,
+                verbose_l2=verbose_l2,
+            ):
+                if event.composite_cursor is not None and event.kind != "heartbeat":
+                    last_cursor = event.composite_cursor
+
+                if event.kind == "heartbeat":
+                    # A real SSE frame (not a `:comment`), carrying the
+                    # most-recent composite cursor in `id` so the browser's
+                    # EventSource retains it across quiet periods (§4.5,
+                    # §3.5).
+                    hb_ts = (
+                        datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    )
+                    try:
+                        write_sse_frame(
+                            self.wfile,
+                            id=event.composite_cursor or last_cursor,
+                            data={"kind": "heartbeat", "ts": hb_ts},
+                        )
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        return
+                    continue
+
+                if event.kind == "gap":
+                    projected = {
+                        "kind": "gap",
+                        "source": event.source,
+                        "reason": event.reason,
+                    }
+                else:
+                    try:
+                        projected = project_for_browser(
+                            {
+                                "kind": "event",
+                                "source": event.source,
+                                "ts": event.ts,
+                                "event_type": event.event_type,
+                                "payload": event.payload or {},
+                            }
+                        )
+                    except Exception as exc:
+                        # Spec §6.6: PII-safe error log only, no exc_info.
+                        sys.stderr.write(
+                            f"[live-log] project_for_browser failed: "
+                            f"source={event.source} "
+                            f"event_type={event.event_type} "
+                            f"error_type={type(exc).__name__}\n"
+                        )
+                        projected = {
+                            "kind": "error",
+                            "source": event.source,
+                            "msg": "projection_failed",
+                            "ts": event.ts,
+                        }
+                try:
+                    write_sse_frame(
+                        self.wfile,
+                        id=event.composite_cursor,
+                        data=projected,
+                    )
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return
+        finally:
+            stop.set()
 
     def do_GET(self) -> None:
         global _LAST_ACTION_RESULT
@@ -2984,6 +3255,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if url.path == "/people-register":
             self._send(200, render_people_register(ctx, ar))
             _LAST_ACTION_RESULT = None
+            return
+        if url.path == "/live-log/stream":
+            self._serve_live_log_stream()
+            return
+        if url.path == "/live-log":
+            self._send(200, render_live_log_page(ctx))
             return
         self._send(404, "<h1>404</h1>")
 
