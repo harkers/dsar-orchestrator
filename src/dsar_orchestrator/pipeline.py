@@ -53,9 +53,12 @@ STAGE_ORDER: tuple[str, ...] = (
     "ingest",
     "stage_2_parallel",  # { embed ∥ detect_2_1_to_2_4 }
     "stage_3_parallel",  # { people_register ∥ (scope_prefilter → rerank) }
+    "sig_block_discovery",  # Phase 3 Task 2 — post-people_register regex pass
     "scope_classify",
     "pii_classify",
     "redact",
+    "presidio_anonymize",  # Presidio defense-in-depth (always-on)
+    "pii_jury_review",  # Phase 5 Task 4 — post-redact jury
     "verify_spec",  # NEW in v5.5 (pre-bake plan check)
     "bake",  # NEW in v5.0
     "verify_pdf",
@@ -68,9 +71,12 @@ SUB_STAGES_BY_STAGE: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),
     "stage_2_parallel": ("embed", "detect_2_1_to_2_4"),
     "stage_3_parallel": ("people_register", "scope_prefilter", "rerank"),
+    "sig_block_discovery": ("sig_block_discovery",),
     "scope_classify": ("scope_classify",),
     "pii_classify": ("pii_classify",),
     "redact": ("redact",),
+    "presidio_anonymize": ("presidio_anonymize",),
+    "pii_jury_review": ("pii_jury_review",),
     "verify_spec": ("verify_spec",),  # NEW in v5.5
     "bake": ("bake",),  # NEW in v5.0
     "verify_pdf": ("verify_pdf",),
@@ -380,6 +386,27 @@ def _run_redact(cfg: CaseConfig) -> None:
 
     redact_adapter.run_for_case(cfg)
     _check_module_work(cfg, "redact")
+
+
+def _run_sig_block_discovery(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import sig_block_discovery as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "sig_block_discovery")
+
+
+def _run_pii_jury_review(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import pii_jury_review as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "pii_jury_review")
+
+
+def _run_presidio_anonymize(cfg: CaseConfig) -> None:
+    from dsar_orchestrator.adapters import presidio_anonymize as adapter
+
+    adapter.run_for_case(cfg)
+    _check_module_work(cfg, "presidio_anonymize")
 
 
 def _run_verify_spec(cfg: CaseConfig) -> RunReport | None:
@@ -1217,6 +1244,12 @@ def run(
             with StageBanner(audit, "stage_3_parallel"):
                 _run_stage_3_parallel(cfg)
 
+        # sig_block_discovery — Phase 3 Task 2; enriches people_register
+        # before the operator review / redact denylist is consumed.
+        if plan.includes("sig_block_discovery"):
+            with StageBanner(audit, "sig_block_discovery"):
+                _run_sig_block_discovery(cfg)
+
         # Stage 4 — LLM scope-classify (Sonnet 4.6, semaphore-gated)
         if plan.includes("scope_classify"):
             with StageBanner(audit, "scope_classify"):
@@ -1231,6 +1264,16 @@ def run(
         if plan.includes("redact"):
             with StageBanner(audit, "redact"):
                 _run_redact(cfg)
+
+        # Presidio Anonymizer — always-on extra defense-in-depth pass.
+        if plan.includes("presidio_anonymize"):
+            with StageBanner(audit, "presidio_anonymize"):
+                _run_presidio_anonymize(cfg)
+
+        # PII jury — Phase 5 Task 4 post-redact defense-in-depth review.
+        if plan.includes("pii_jury_review"):
+            with StageBanner(audit, "pii_jury_review"):
+                _run_pii_jury_review(cfg)
 
         # Stage 7 — verify-spec (v5.5; pre-bake plan check, halt-on-fail)
         if plan.includes("verify_spec"):

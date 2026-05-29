@@ -626,6 +626,46 @@ def _load_register(cfg: CaseConfig) -> list[dict] | None:
         return None
 
 
+# ─── Phase 3/5 + Presidio checkers ─────────────────────────────────
+
+
+def check_sig_block_discovery(cfg: CaseConfig) -> ModuleCheckResult:
+    """sig_block_discovery writes back into working/people_register.json;
+    the conductor validates presence of that file (written by the
+    preceding people_register stage)."""
+    p = cfg.case_path / "working" / "people_register.json"
+    if not p.exists():
+        return _critical(
+            ["working/people_register.json missing after sig_block_discovery"],
+            _rerun_hint("sig_block_discovery", cfg.case_no),
+        )
+    return _ok(["sig_block_discovery: people_register.json present"])
+
+
+def check_pii_jury_review(cfg: CaseConfig) -> ModuleCheckResult:
+    """pii_jury_review writes working/pii_jury_verdicts.jsonl."""
+    p = cfg.case_path / "working" / "pii_jury_verdicts.jsonl"
+    if not p.exists():
+        return _critical(
+            ["working/pii_jury_verdicts.jsonl missing after pii_jury_review"],
+            _rerun_hint("pii_jury_review", cfg.case_no),
+        )
+    return _ok(["pii_jury_review: pii_jury_verdicts.jsonl present"])
+
+
+def check_presidio_anonymize(cfg: CaseConfig) -> ModuleCheckResult:
+    """presidio_anonymize writes working/<ref>.anonymized.txt files.
+    Presence of at least one is sufficient for a passing check."""
+    working = cfg.case_path / "working"
+    anonymized = list(working.glob("*.anonymized.txt")) if working.exists() else []
+    if not anonymized:
+        return _warning(
+            ["no *.anonymized.txt files found after presidio_anonymize (may be OK if no refs)"],
+            _rerun_hint("presidio_anonymize", cfg.case_no),
+        )
+    return _ok([f"presidio_anonymize: {len(anonymized)} anonymized file(s) present"])
+
+
 # ─── dispatch ───────────────────────────────────────────────────────
 
 
@@ -636,9 +676,12 @@ CHECKERS: dict[str, callable] = {
     "people_register": check_people_register,
     "scope_prefilter": check_scope_prefilter,
     "rerank": check_rerank,
+    "sig_block_discovery": check_sig_block_discovery,
     "scope_classify": check_scope_classify,
     "pii_classify": check_pii_classify,
     "redact": check_redact,
+    "presidio_anonymize": check_presidio_anonymize,
+    "pii_jury_review": check_pii_jury_review,
     "verify_spec": check_verify_spec,
     "bake": check_bake,
     "verify_pdf": check_verify_pdf,
