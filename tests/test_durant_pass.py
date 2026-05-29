@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.needs_toolkit
 
 
@@ -54,7 +53,11 @@ def test_module_importable() -> None:
     assert hasattr(mod, "run")
     assert hasattr(mod, "main")
     assert hasattr(mod, "classify_one")
-    assert hasattr(mod, "DURANT_SYSTEM_PROMPT")
+    # The inline DURANT_SYSTEM_PROMPT constant was removed; the prompt is now
+    # loaded from the toolkit's sealed registry (durant.system v1.1.0) so each
+    # verdict row carries verifiable provenance.
+    assert mod._DURANT_PROMPT_ID == "durant.system"
+    assert mod._durant_asset().body.strip()
     assert mod.VALID_VERDICTS == ("biographical", "work_context_only", "ambiguous")
 
 
