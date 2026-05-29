@@ -1,0 +1,102 @@
+# People register coverage — drop-in snippet for case-<id>-status.sh
+# Phase 6 Task 6 deliverable per spec §5.
+#
+# Source this from your case status script, OR copy/paste the block
+# below into the script directly. Reads:
+#   $CASE/working/people_register.json    (Phase 1 output)
+#   $CASE/working/data_subject.json        (Phase 1 input)
+#   $CASE/working/third_party_denylist.json (Phase 3 Task 5 output)
+#
+# Requires: print_heading / print_ok / print_warn / print_err to be
+# defined upstream (see the existing case-301770-status.sh for the
+# canonical implementations).
+
+print_heading "People register coverage"
+
+if [ ! -f "$CASE/working/people_register.json" ]; then
+  print_err "BLOCKED — run dsar-build-people-register --case <id>"
+  echo
+else
+  python3 - <<PY
+import json, datetime, os
+from pathlib import Path
+
+case = Path("$CASE")
+register_path = case / "working" / "people_register.json"
+mtime = datetime.datetime.fromtimestamp(register_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+print(f"  ✓ working/people_register.json present (last built {mtime})")
+
+try:
+    register = json.loads(register_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"  ✗ unreadable: {exc!r}")
+    raise SystemExit(0)
+
+if not isinstance(register, list):
+    print("  ✗ register is not a list")
+    raise SystemExit(0)
+
+# Source strategy detection — best-effort via the toolkit registry
+try:
+    from dsar_pipeline.source_strategies import default_registry
+    reg = default_registry()
+    confidences = reg.detect_all(case)
+    chosen = reg.select_strategy(case) if confidences else None
+    if chosen is not None:
+        c = confidences.get(chosen.name)
+        c_str = f"{c:.2f}" if c is not None else "?"
+        print(f"  source strategy: {chosen.name} (confidence {c_str})")
+except Exception as exc:
+    print(f"  source strategy: (detection unavailable: {type(exc).__name__})")
+
+# Cluster + identifier counts
+third_party = sum(1 for c in register if isinstance(c, dict) and not c.get("is_data_subject"))
+subject = sum(1 for c in register if isinstance(c, dict) and c.get("is_data_subject"))
+emails = sum(
+    len(c.get("emails") or [])
+    for c in register if isinstance(c, dict)
+)
+phones = sum(
+    len(c.get("phones") or [])
+    for c in register if isinstance(c, dict)
+)
+print(f"  entries: {len(register)} persons / {emails} emails / {phones} phones")
+
+# Data subject aliases
+ds_path = case / "working" / "data_subject.json"
+ds_aliases = 0
+if ds_path.exists():
+    try:
+        ds = json.loads(ds_path.read_text())
+        ds_aliases = len(ds.get("aliases") or [])
+    except (OSError, json.JSONDecodeError):
+        pass
+print(f"  data_subject: {subject} cluster{'s' if subject != 1 else ''} ({ds_aliases} aliases)")
+print(f"  third_party: {third_party} clusters")
+
+# Pre-redact gate verdict
+if third_party == 0 and len(register) > 0:
+    # Empty third-party with non-empty register on a corpus that should
+    # have communicants is the case-301770 silent-empty pattern — fail.
+    print("  ✗ pre-redact gate: BLOCKED (zero third-party clusters)")
+elif third_party == 0:
+    print("  ⚠ pre-redact gate: empty corpus (nothing to redact)")
+else:
+    print("  ✓ pre-redact gate: PASSED")
+
+# Denylist verdict (Phase 3 Task 5 output)
+dl_path = case / "working" / "third_party_denylist.json"
+if dl_path.exists():
+    try:
+        dl = json.loads(dl_path.read_text())
+        entries = dl.get("entries") or []
+        redact_true = sum(1 for e in entries if isinstance(e, dict) and e.get("redact"))
+        redact_false = sum(1 for e in entries if isinstance(e, dict) and not e.get("redact"))
+        print(f"  denylist: {redact_true} redact / {redact_false} preserve / {dl.get('controller', '?')} controller")
+    except (OSError, json.JSONDecodeError):
+        print("  denylist: present but unreadable")
+else:
+    print("  denylist: not yet curated (run /people-register console)")
+PY
+  echo
+fi
