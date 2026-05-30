@@ -33,7 +33,6 @@ from dsar_orchestrator.local_broker.dedupe_filter import canonical_refs
 
 BROKER = "http://127.0.0.1:8090/v1/chat/completions"
 MODEL = "mini"
-PROMPT_VERSION = "durant-recheck/v1"
 MAX_TEXT_CHARS = 6000
 TIMEOUT_SECONDS = 120.0
 PROGRESS_INTERVAL = 100
@@ -46,25 +45,20 @@ ALLOWED_VERDICTS = (
     "reclassify_to_ambiguous",
 )
 
-SYSTEM_PROMPT = """You are a UK data-protection adjudicator running an under-disclosure safety check on a DSAR (UK GDPR Art 15) pipeline.
+# Recheck system prompt loaded from the toolkit's sealed prompt registry so
+# every recheck row carries verifiable provenance. The registered
+# durant.recheck.system v1.1.0 body is byte-identical to the prior inline
+# constant — adjudication unchanged, provenance added.
+_RECHECK_PROMPT_ID = "durant.recheck.system"
 
-An earlier Durant v FSA biographical-focus test marked this document `work_context_only` — meaning it was EXCLUDED from the disclosure pack on the grounds that the data subject was only peripherally mentioned (cc/bcc, addressee on someone else's matter) and the document content was about other people / unrelated business.
 
-Your job is to second-guess that exclusion conservatively. Under-disclosure is the worse legal error. If there is ANY reasonable basis to think the original verdict was wrong, recommend reclassification.
+def _recheck_asset():
+    """Load the sealed durant.recheck.system asset (lru_cached in PromptLoader).
+    Fail-loud if the toolkit prompt registry is unavailable."""
+    from dsar_pipeline.gates.prompt_loader import PromptLoader
 
-Three possible recheck verdicts:
-  confirmed_work_context_only — the original verdict is correct; doc stays excluded.
-  reclassify_to_biographical — on review, the doc IS about the data subject (their work, decisions, contract, performance) and should be DISCLOSED. The original verdict missed it.
-  reclassify_to_ambiguous — evidence is genuinely mixed; operator should review.
+    return PromptLoader.load(_RECHECK_PROMPT_ID)
 
-Look for these signals when judging:
-  - The subject's name as an active actor (not just a recipient).
-  - Direct discussion of the subject's contract, role, performance, payments.
-  - The subject's own words (their emails sent, their attached documents).
-  - The subject being the topic, not just a routine cc on someone else's topic.
-
-Respond with VALID JSON ONLY, no markdown, no prose. Schema:
-{"recheck_verdict": "<one of: confirmed_work_context_only|reclassify_to_biographical|reclassify_to_ambiguous>", "rationale": "<one or two sentences citing the evidence>"}"""
 
 log = logging.getLogger("durant-recheck")
 
@@ -221,17 +215,22 @@ def recheck_one(
         f"Document ref: {doc_ref}\n\n"
         f"Document content:\n{truncated}{truncation_note}"
     )
+    asset = _recheck_asset()
     base = {
         "case_id": case_id,
         "doc_ref": doc_ref,
         "model": f"{MODEL}@127.0.0.1:8090/v1",
-        "prompt_version": PROMPT_VERSION,
+        "prompt_id": asset.prompt_id,
+        "prompt_version": asset.version,
+        "prompt_canonical_seal_sha256": asset.canonical_seal_sha256,
+        "prompt_effective_sha256": asset.effective_sha256,
+        "prompt_applied_strips": list(asset.applied_strips or []),
         "original_verdict": "work_context_only",
         "original_rationale": original_rationale,
     }
     started = time.monotonic()
     try:
-        raw = _post(SYSTEM_PROMPT, user)
+        raw = _post(asset.body, user)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
         return {
             **base,
@@ -389,7 +388,9 @@ def main() -> int:
     )
     p = argparse.ArgumentParser(
         prog="dsar-durant-recheck",
-        description="Under-disclosure safety net for the Durant pass; rechecks every work_context_only doc.",
+        description=(
+            "Under-disclosure safety net for the Durant pass; rechecks every work_context_only doc."
+        ),
     )
     p.add_argument(
         "--case-root",

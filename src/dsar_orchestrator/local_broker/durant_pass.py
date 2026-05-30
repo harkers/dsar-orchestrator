@@ -40,40 +40,26 @@ from dsar_orchestrator.local_broker.dedupe_filter import canonical_refs
 
 BROKER = "http://127.0.0.1:8090/v1/chat/completions"
 MODEL = "mini"
-PROMPT_VERSION = "durant/v1"
 MAX_TEXT_CHARS = 6000
 TIMEOUT_SECONDS = 120.0
 PROGRESS_INTERVAL = 50
 
-# Verbatim from dsar_pipeline/gates/gate_durant.py:DURANT_SYSTEM_PROMPT
-DURANT_SYSTEM_PROMPT = """You are a UK data-protection adjudicator applying the Durant v FSA \
-biographical-focus test to a single document. The data subject has \
-made a UK GDPR Article 15 access request. A document is disclosable \
-only if it is biographical for the subject — i.e. the subject is the \
-focus of the content, not merely an incidental cc/bcc recipient on a \
-matter about other people or about a business topic.
+# Durant system prompt is loaded from the toolkit's sealed prompt registry so
+# every verdict row carries verifiable provenance (prompt_canonical_seal_sha256
+# etc.) that `dsar-conductor verify --check prompt-versions` cross-checks. The
+# registered durant.system v1.1.0 body is byte-identical to the prior inline
+# constant, so adjudication is unchanged — only provenance is added.
+_DURANT_PROMPT_ID = "durant.system"
 
-Three verdicts are possible:
-  biographical — subject is named/discussed; document content is \
-about them (their work, their decisions, their performance, their \
-correspondence, their identity).
-  work_context_only — subject appears only as a cc/bcc recipient or \
-as a routine business addressee, and the document content is about \
-other matters (third-party operations, unrelated projects, generic \
-broadcasts).
-  ambiguous — evidence is mixed; cannot decide cleanly.
 
-Default to 'biographical' under uncertainty (the operator can exclude \
-later; under-disclosure is the worse error). Direct-addressee status \
-(subject in the To: line) of an email about a topic that concerns the \
-subject themselves (e.g. their contract, their assignment, their \
-performance) is biographical, not work_context_only — work_context_only \
-is reserved for cases where the subject is a peripheral cc/bcc and \
-the topic is unrelated to them.
+def _durant_asset():
+    """Load the sealed durant.system asset (lru_cached inside PromptLoader).
+    Raises PromptIntegrityError if the toolkit prompt registry is unavailable
+    — fail-loud rather than silently fall back to an unsealed prompt."""
+    from dsar_pipeline.gates.prompt_loader import PromptLoader
 
-Respond with VALID JSON ONLY, no markdown, no prose. Schema:
-{"durant_verdict": "<biographical|work_context_only|ambiguous>", \
-"rationale": "<one or two sentences citing the evidence>"}"""
+    return PromptLoader.load(_DURANT_PROMPT_ID)
+
 
 VALID_VERDICTS = ("biographical", "work_context_only", "ambiguous")
 RETRY_DELAYS_S = (2.0, 8.0, 30.0, 60.0)
@@ -209,15 +195,20 @@ def classify_one(*, case_id: str, doc_ref: str, text: str, subject_summary: str)
         f"Document ref: {doc_ref}\n\n"
         f"Document content:\n{truncated}{truncation_note}"
     )
+    asset = _durant_asset()
     base = {
         "case_id": case_id,
         "doc_ref": doc_ref,
         "model": f"{MODEL}@127.0.0.1:8090/v1",
-        "prompt_version": PROMPT_VERSION,
+        "prompt_id": asset.prompt_id,
+        "prompt_version": asset.version,
+        "prompt_canonical_seal_sha256": asset.canonical_seal_sha256,
+        "prompt_effective_sha256": asset.effective_sha256,
+        "prompt_applied_strips": list(asset.applied_strips or []),
     }
     started = time.monotonic()
     try:
-        raw = _post(DURANT_SYSTEM_PROMPT, user)
+        raw = _post(asset.body, user)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
         return {
             **base,
